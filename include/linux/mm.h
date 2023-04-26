@@ -341,6 +341,7 @@ enum {
 	DECLARE_VMA_BIT(HIGH_ARCH_4, 36),
 	DECLARE_VMA_BIT(HIGH_ARCH_5, 37),
 	DECLARE_VMA_BIT(HIGH_ARCH_6, 38),
+	DECLARE_VMA_BIT(HIGH_ARCH_7, 39),
 	/*
 	 * This flag is used to connect VFIO to arch specific KVM code. It
 	 * indicates that the memory under this VMA is safe for use with any
@@ -380,6 +381,7 @@ enum {
 	 */
 	DECLARE_VMA_BIT_ALIAS(SHADOW_STACK, HIGH_ARCH_6),
 #endif
+	DECLARE_VMA_BIT_ALIAS(VM_SHARED_PT, HIGH_ARCH_7), /* Shared page tables */
 	DECLARE_VMA_BIT_ALIAS(SAO, ARCH_1),		/* Strong Access Ordering (powerpc) */
 	DECLARE_VMA_BIT_ALIAS(GROWSUP, ARCH_1),		/* parisc */
 	DECLARE_VMA_BIT_ALIAS(SPARC_ADI, ARCH_1),	/* sparc64 */
@@ -469,6 +471,7 @@ enum {
 #else
 #define VM_SHADOW_STACK	VM_NONE
 #endif
+#define VM_SHARED_PT	INIT_VM_FLAG(VM_SHARED_PT)
 #if defined(CONFIG_PPC64)
 #define VM_SAO		INIT_VM_FLAG(SAO)
 #elif defined(CONFIG_PARISC)
