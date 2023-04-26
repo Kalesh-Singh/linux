@@ -710,4 +710,6 @@ struct ptshare_data {
 int ptshare_new_mm(struct file *file, struct vm_area_struct *vma);
 void ptshare_del_mm(struct vm_area_struct *vm);
 int ptshare_insert_vma(struct mm_struct *mm, struct vm_area_struct *vma);
+vm_fault_t find_shared_vma(struct vm_area_struct **vmap,
+			unsigned long *addrp, unsigned int flags);
 #endif	/* __MM_VMA_H */
