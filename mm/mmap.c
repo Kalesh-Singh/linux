@@ -340,7 +340,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 {
 	struct mm_struct *mm = current->mm;
 	int pkey = 0;
-	int __maybe_unused ptshare = !!(vm_flags & MAP_SHARED_PT);
+	int ptshare = !!(vm_flags & MAP_SHARED_PT);
 
 	*populate = 0;
 
@@ -562,6 +562,58 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	    ((vm_flags & VM_LOCKED) ||
 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
 		*populate = len;
+
+	/*
+	 * Check if this mapping is a candidate for page table sharing
+	 * at PMD level. It is if following conditions hold:
+	 *	- It is not anonymous mapping
+	 *	- It is not hugetlbfs mapping (for now)
+	 *	- flags conatins MAP_SHARED or MAP_SHARED_VALIDATE and
+	 *	  MAP_SHARED_PT
+	 *	- Start address is aligned to PMD size
+	 *	- Mapping size is a multiple of PMD size
+	 */
+	if (ptshare && file && !is_file_hugepages(file)) {
+		struct vm_area_struct *vma;
+
+		vma = find_vma(mm, addr);
+		if (!((vma->vm_start | vma->vm_end) & (PMD_SIZE - 1))) {
+			struct ptshare_data *info = file->f_mapping->ptshare_data;
+			/*
+			 * If this mapping has not been set up for page table
+			 * sharing yet, do so by creating a new mm to hold the
+			 * shared page tables for this mapping
+			 */
+			if (info == NULL) {
+				int ret;
+
+				ret = ptshare_new_mm(file, vma);
+				if (ret < 0)
+					return ret;
+
+				info = file->f_mapping->ptshare_data;
+				ret = ptshare_insert_vma(info->mm, vma);
+				if (ret < 0)
+					addr = ret;
+				else
+					vm_flags_set(vma, VM_SHARED_PT);
+			} else {
+				/*
+				 * Page tables will be shared only if the
+				 * file is mapped in with the same permissions
+				 * across all mappers with same starting
+				 * address and size
+				 */
+				if (((prot & info->mode) == info->mode) &&
+					(addr == info->start) &&
+					(len == info->size)) {
+					vm_flags_set(vma, VM_SHARED_PT);
+					refcount_inc(&info->refcnt);
+				}
+			}
+		}
+	}
+
 	return addr;
 }
 

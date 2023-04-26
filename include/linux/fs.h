@@ -14,7 +14,6 @@
 #include <linux/list.h>
 #include <linux/llist.h>
 #include <linux/radix-tree.h>
-#include <linux/xarray.h>
 #include <linux/rbtree.h>
 #include <linux/init.h>
 #include <linux/pid.h>
@@ -466,6 +465,7 @@ extern const struct address_space_operations empty_aops;
  * @i_private_lock: For use by the owner of the address_space.
  * @i_private_list: For use by the owner of the address_space.
  * @i_private_data: For use by the owner of the address_space.
+ * @ptshare_data: For shared page table use.
  */
 struct address_space {
 	struct inode		*host;
@@ -487,6 +487,7 @@ struct address_space {
 	struct list_head	i_private_list;
 	struct rw_semaphore	i_mmap_rwsem;
 	void *			i_private_data;
+	void *			ptshare_data;
 } __attribute__((aligned(sizeof(long)))) __randomize_layout;
 	/*
 	 * On most architectures that alignment is already the case; but

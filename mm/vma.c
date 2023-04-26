@@ -464,8 +464,19 @@ void remove_vma(struct vm_area_struct *vma)
 {
 	might_sleep();
 	vma_close(vma);
-	if (vma->vm_file)
+	if (vma->vm_file) {
+		/*
+		 * If the VMA is shared, then it must have ptshare_data
+		 * which we need to clean up.
+		 */
+		if (vma_is_shared(vma)) {
+			BUG_ON(!vma->vm_file->f_mapping);
+			BUG_ON(!vma->vm_file->f_mapping->ptshare_data);
+			ptshare_del_mm(vma);
+		}
+
 		fput(vma->vm_file);
+	}
 	mpol_put(vma_policy(vma));
 	vm_area_free(vma);
 }
@@ -503,6 +514,10 @@ __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 
 	WARN_ON(vma->vm_start >= addr);
 	WARN_ON(vma->vm_end <= addr);
+
+	/* VMAs with shared page tables cannot be split */
+	if (vma_is_shared(vma))
+		return -EINVAL;
 
 	if (vma->vm_ops && vma->vm_ops->may_split) {
 		err = vma->vm_ops->may_split(vma, addr);

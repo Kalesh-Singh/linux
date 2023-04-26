@@ -697,5 +697,17 @@ static inline bool vma_is_shared(const struct vm_area_struct *vma)
 {
 	return vma->vm_flags & VM_SHARED_PT;
 }
-
+/*
+ * mm/ptshare.c
+ */
+struct ptshare_data {
+	struct mm_struct *mm;
+	refcount_t refcnt;
+	unsigned long start;
+	unsigned long size;
+	unsigned long mode;
+};
+int ptshare_new_mm(struct file *file, struct vm_area_struct *vma);
+void ptshare_del_mm(struct vm_area_struct *vm);
+int ptshare_insert_vma(struct mm_struct *mm, struct vm_area_struct *vma);
 #endif	/* __MM_VMA_H */
