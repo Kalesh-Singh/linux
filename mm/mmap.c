@@ -340,6 +340,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 {
 	struct mm_struct *mm = current->mm;
 	int pkey = 0;
+	int __maybe_unused ptshare = !!(vm_flags & MAP_SHARED_PT);
 
 	*populate = 0;
 
