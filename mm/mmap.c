@@ -585,8 +585,6 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			 * shared page tables for this mapping
 			 */
 			if (info == NULL) {
-				int ret;
-
 				info = kzalloc(sizeof(*info), GFP_KERNEL);
 				if (!info)
 					return -ENOMEM;
@@ -594,11 +592,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 				info->mm = ptshare_host_mm;
 				file->f_mapping->ptshare_data = info;
 
-				ret = ptshare_insert_vma(info->mm, vma);
-				if (ret < 0)
-					addr = ret;
-				else
-					vm_flags_set(vma, VM_SHARED_PT);
+				vm_flags_set(vma, VM_SHARED_PT);
 			} else {
 				vm_flags_set(vma, VM_SHARED_PT);
 			}
