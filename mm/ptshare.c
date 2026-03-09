@@ -103,6 +103,10 @@ static pgtable_t get_pte_table(struct mm_struct *mm, unsigned long addr)
  * ptshare_host_mm and links it into the guest's PMD entry. This allows the guest
  * to share last-level page tables for system libraries.
  *
+ * This function is safe to call under per-VMA locking (FAULT_FLAG_VMA_LOCK)
+ * because it relies on the host's mmap_lock (a different MM) and guest
+ * page table spinlocks for synchronization, avoiding the guest's mmap_lock.
+ *
  * Returns VM_FAULT_NOPAGE on successful splicing to trigger a fault restart
  * in the guest, or 0 if the VMA is not a candidate for sharing.
  */
@@ -147,6 +151,9 @@ splice_shared_pte(struct vm_area_struct *vma, unsigned long *addrp,
 	if (pmd_none(*guest_pmd)) {
 		spinlock_t *guest_ptl;
 		struct page *pte_page = host_pte_table;
+
+		pr_info("ZAPTS: Splicing host PTE %px into guest MM %px at %lx\n",
+			host_pte_table, vma->vm_mm, *addrp);
 
 		/*
 		 * Increments refcount on the PTE table page so it remains

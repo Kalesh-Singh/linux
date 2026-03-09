@@ -340,9 +340,10 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 {
 	struct mm_struct *mm = current->mm;
 	int pkey = 0;
-	int ptshare = !!(vm_flags & MAP_SHARED_PT);
+	int ptshare = !!(flags & MAP_SHARED_PT);
 
 	*populate = 0;
+
 
 	mmap_assert_write_locked(mm);
 
