@@ -704,6 +704,6 @@ extern struct mm_struct *ptshare_host_mm;
 struct ptshare_data {
 	struct mm_struct *mm;
 };
-vm_fault_t find_shared_vma(struct vm_area_struct **vmap,
+vm_fault_t splice_shared_pte(struct vm_area_struct *vma,
 			unsigned long *addrp, unsigned int flags);
 #endif	/* __MM_VMA_H */

@@ -191,6 +191,7 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 {
 	pgtable_t token = pmd_pgtable(*pmd);
 	pmd_clear(pmd);
+	mm_dec_nr_ptes(tlb->mm);
 	/*
 	 * if this address range shares page tables with other processes,
 	 * do not release pte pages. Those pages will be released when
@@ -202,7 +203,6 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 		return;
 	}
 	pte_free_tlb(tlb, token, addr);
-	mm_dec_nr_ptes(tlb->mm);
 }
 
 static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
@@ -236,13 +236,8 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 
 	pmd = pmd_offset(pud, start);
 	pud_clear(pud);
-	if (shared_pte) {
-		tlb_flush_pud_range(tlb, start, PAGE_SIZE);
-		tlb->freed_tables = 1;
-	} else {
-		pmd_free_tlb(tlb, pmd, start);
-		mm_dec_nr_pmds(tlb->mm);
-	}
+	pmd_free_tlb(tlb, pmd, start);
+	mm_dec_nr_pmds(tlb->mm);
 }
 
 static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
@@ -6627,8 +6622,6 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	struct mm_struct *mm = vma->vm_mm;
 	vm_fault_t ret;
 	bool is_droppable;
-	bool shared = false;
-	struct mm_struct *orig_mm;
 
 	__set_current_state(TASK_RUNNING);
 
@@ -6636,10 +6629,8 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	if (ret)
 		goto out;
 
-	orig_mm = vma->vm_mm;
 	if (unlikely(vma_is_shared(vma))) {
-		shared = true;
-		ret = find_shared_vma(&vma, &address, flags);
+		ret = splice_shared_pte(vma, &address, flags);
 		if (ret)
 			goto out;
 	}
@@ -6674,36 +6665,6 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	 */
 
 	lru_gen_exit_fault();
-
-	/*
-	 * Release the read lock on shared VMA's parent mm unless
-	 * __handle_mm_fault released the lock already.
-	 * __handle_mm_fault sets VM_FAULT_RETRY in return value if
-	 * it released mmap lock. If lock was released, that implies
-	 * the lock would have been released on task's original mm if
-	 * this were not a shared PTE vma. To keep lock state consistent,
-	 * make sure to release the lock on task's original mm
-	 */
-	if (shared) {
-		int release_mmlock = 1;
-
-		if (!(ret & VM_FAULT_RETRY)) {
-			mmap_read_unlock(vma->vm_mm);
-			release_mmlock = 0;
-		} else if ((flags & FAULT_FLAG_ALLOW_RETRY) &&
-			(flags & FAULT_FLAG_RETRY_NOWAIT)) {
-			mmap_read_unlock(vma->vm_mm);
-			release_mmlock = 0;
-		}
-
-		/*
-		 * Reset guest vma pointers that were set up in
-		 * find_shared_vma() to process this fault.
-		 */
-		vma->vm_mm = orig_mm;
-		if (release_mmlock)
-			mmap_read_unlock(orig_mm);
-	}
 
 	/* If the mapping is droppable, then errors due to OOM aren't fatal. */
 	if (is_droppable)
