@@ -160,55 +160,6 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
 }
 
 /*
- * Create a new mm struct that will hold the shared PTEs. Pointer to
- * this new mm is stored in the data structure ptshare_data which also
- * includes a refcount for any current references to PTEs in this new
- * mm. This refcount is used to determine when the mm struct for shared
- * PTEs can be deleted.
- */
-int
-ptshare_new_mm(struct file *file, struct vm_area_struct *vma)
-{
-	struct mm_struct *new_mm;
-	struct ptshare_data *info = NULL;
-	int retval = 0;
-	unsigned long start = vma->vm_start;
-	unsigned long len = vma->vm_end - vma->vm_start;
-
-	new_mm = mm_alloc();
-	if (!new_mm) {
-		retval = -ENOMEM;
-		goto err_free;
-	}
-	new_mm->mmap_base = start;
-	new_mm->task_size = len;
-	if (!new_mm->task_size)
-		new_mm->task_size--;
-#ifdef CONFIG_MEMCG
-	new_mm->owner = NULL;
-#endif
-
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
-	if (!info) {
-		retval = -ENOMEM;
-		goto err_free;
-	}
-	info->mm = new_mm;
-	info->start = start;
-	info->size = len;
-	refcount_set(&info->refcnt, 1);
-	file->f_mapping->ptshare_data = info;
-
-	return retval;
-
-err_free:
-	if (new_mm)
-		mmput(new_mm);
-	kfree(info);
-	return retval;
-}
-
-/*
  * insert vma into mm holding shared page tables
  */
 int
@@ -242,40 +193,4 @@ ptshare_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *vma)
 	err = ptshare_copy_pmd(host_mm, vma->vm_mm, vma, vma->vm_start);
 
 	return err;
-}
-
-/*
- * Free the mm struct created to hold shared PTEs and associated data
- * structures
- */
-static inline void
-free_ptshare_mm(struct ptshare_data *info)
-{
-	mmput(info->mm);
-	kfree(info);
-}
-
-/*
- * This function is called when a reference to the shared PTEs in mm
- * struct is dropped. It updates refcount and checks to see if last
- * reference to the mm struct holding shared PTEs has been dropped. If
- * so, it cleans up the mm struct and associated data structures
- */
-void
-ptshare_del_mm(struct vm_area_struct *vma)
-{
-	struct ptshare_data *info;
-	struct file *file = vma->vm_file;
-
-	if (!file || (!file->f_mapping))
-		return;
-	info = file->f_mapping->ptshare_data;
-	WARN_ON(!info);
-	if (!info)
-		return;
-
-	if (refcount_dec_and_test(&info->refcnt)) {
-		free_ptshare_mm(info);
-		file->f_mapping->ptshare_data = NULL;
-	}
 }

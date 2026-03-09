@@ -464,19 +464,8 @@ void remove_vma(struct vm_area_struct *vma)
 {
 	might_sleep();
 	vma_close(vma);
-	if (vma->vm_file) {
-		/*
-		 * If the VMA is shared, then it must have ptshare_data
-		 * which we need to clean up.
-		 */
-		if (vma_is_shared(vma)) {
-			BUG_ON(!vma->vm_file->f_mapping);
-			BUG_ON(!vma->vm_file->f_mapping->ptshare_data);
-			ptshare_del_mm(vma);
-		}
-
+	if (vma->vm_file)
 		fput(vma->vm_file);
-	}
 	mpol_put(vma_policy(vma));
 	vm_area_free(vma);
 }

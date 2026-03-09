@@ -587,11 +587,17 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			if (info == NULL) {
 				int ret;
 
-				ret = ptshare_new_mm(file, vma);
-				if (ret < 0)
-					return ret;
+				info = kzalloc(sizeof(*info), GFP_KERNEL);
+				if (!info)
+					return -ENOMEM;
 
-				info = file->f_mapping->ptshare_data;
+				info->mm = ptshare_host_mm;
+				info->start = addr;
+				info->size = len;
+				info->mode = prot;
+				refcount_set(&info->refcnt, 1);
+				file->f_mapping->ptshare_data = info;
+
 				ret = ptshare_insert_vma(info->mm, vma);
 				if (ret < 0)
 					addr = ret;
