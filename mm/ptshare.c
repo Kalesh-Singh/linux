@@ -13,6 +13,22 @@
 #include <asm/pgalloc.h>
 #include "internal.h"
 
+struct mm_struct *ptshare_host_mm;
+
+static int __init ptshare_init(void)
+{
+	ptshare_host_mm = mm_alloc();
+	if (!ptshare_host_mm)
+		panic("Failed to allocate ptshare_host_mm");
+
+#ifdef CONFIG_MEMCG
+	ptshare_host_mm->owner = NULL;
+#endif
+
+	return 0;
+}
+core_initcall(ptshare_init);
+
 /*
  */
 static pmd_t

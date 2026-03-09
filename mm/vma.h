@@ -700,6 +700,7 @@ static inline bool vma_is_shared(const struct vm_area_struct *vma)
 /*
  * mm/ptshare.c
  */
+extern struct mm_struct *ptshare_host_mm;
 struct ptshare_data {
 	struct mm_struct *mm;
 	refcount_t refcnt;
