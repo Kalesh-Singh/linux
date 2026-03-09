@@ -703,10 +703,6 @@ static inline bool vma_is_shared(const struct vm_area_struct *vma)
 extern struct mm_struct *ptshare_host_mm;
 struct ptshare_data {
 	struct mm_struct *mm;
-	refcount_t refcnt;
-	unsigned long start;
-	unsigned long size;
-	unsigned long mode;
 };
 int ptshare_insert_vma(struct mm_struct *mm, struct vm_area_struct *vma);
 vm_fault_t find_shared_vma(struct vm_area_struct **vmap,

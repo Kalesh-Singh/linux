@@ -592,10 +592,6 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 					return -ENOMEM;
 
 				info->mm = ptshare_host_mm;
-				info->start = addr;
-				info->size = len;
-				info->mode = prot;
-				refcount_set(&info->refcnt, 1);
 				file->f_mapping->ptshare_data = info;
 
 				ret = ptshare_insert_vma(info->mm, vma);
@@ -604,18 +600,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 				else
 					vm_flags_set(vma, VM_SHARED_PT);
 			} else {
-				/*
-				 * Page tables will be shared only if the
-				 * file is mapped in with the same permissions
-				 * across all mappers with same starting
-				 * address and size
-				 */
-				if (((prot & info->mode) == info->mode) &&
-					(addr == info->start) &&
-					(len == info->size)) {
-					vm_flags_set(vma, VM_SHARED_PT);
-					refcount_inc(&info->refcnt);
-				}
+				vm_flags_set(vma, VM_SHARED_PT);
 			}
 		}
 	}

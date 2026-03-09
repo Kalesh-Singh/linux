@@ -68,49 +68,6 @@ static pmd_t
 }
 
 /*
- * Find the shared pmd entries in host mm struct and install them into
- * guest page tables.
- */
-static int
-ptshare_copy_pmd(struct mm_struct *host_mm, struct mm_struct *guest_mm,
-			struct vm_area_struct *vma, unsigned long addr)
-{
-	pgd_t *guest_pgd;
-	p4d_t *guest_p4d;
-	pud_t *guest_pud;
-	pmd_t *host_pmd;
-	spinlock_t *host_ptl, *guest_ptl;
-
-	guest_pgd = pgd_offset(guest_mm, addr);
-	guest_p4d = p4d_offset(guest_pgd, addr);
-	if (p4d_none(*guest_p4d)) {
-		guest_p4d = p4d_alloc(guest_mm, guest_pgd, addr);
-		if (!guest_p4d)
-			return 1;
-	}
-
-	guest_pud = pud_offset(guest_p4d, addr);
-	if (pud_none(*guest_pud)) {
-		host_pmd = get_pmd(host_mm, addr);
-		if (!host_pmd)
-			return 1;
-
-		get_page(virt_to_page(host_pmd));
-		host_ptl = pmd_lockptr(host_mm, host_pmd);
-		guest_ptl = pud_lockptr(guest_mm, guest_pud);
-		spin_lock(host_ptl);
-		spin_lock(guest_ptl);
-		pud_populate(guest_mm, guest_pud,
-			(pmd_t *)((unsigned long)host_pmd & PAGE_MASK));
-		put_page(virt_to_page(host_pmd));
-		spin_unlock(guest_ptl);
-		spin_unlock(host_ptl);
-	}
-
-	return 0;
-}
-
-/*
  * Find the shared page tables in hosting mm struct and install those in
  * the guest mm struct
  */
@@ -120,8 +77,7 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
 {
 	struct ptshare_data *info;
 	struct mm_struct *host_mm;
-	struct vm_area_struct *host_vma, *guest_vma = *vmap;
-	unsigned long host_addr;
+	struct vm_area_struct *guest_vma = *vmap;
 	pmd_t *guest_pmd, *host_pmd;
 
 	if ((!guest_vma->vm_file) || (!guest_vma->vm_file->f_mapping))
@@ -135,19 +91,13 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
 	host_mm = info->mm;
 
 	mmap_read_lock(host_mm);
-	host_addr = *addrp - guest_vma->vm_start + host_mm->mmap_base;
-	host_pmd = get_pmd(host_mm, host_addr);
+	host_pmd = get_pmd(host_mm, *addrp);
 	guest_pmd = get_pmd(guest_vma->vm_mm, *addrp);
 	if (!pmd_same(*guest_pmd, *host_pmd)) {
 		set_pmd(guest_pmd, *host_pmd);
 		mmap_read_unlock(host_mm);
 		return VM_FAULT_NOPAGE;
 	}
-
-	*addrp = host_addr;
-	host_vma = find_vma(host_mm, host_addr);
-	if (!host_vma)
-		return VM_FAULT_SIGSEGV;
 
 	/*
 	 * Point vm_mm for the faulting vma to the mm struct holding shared
@@ -183,14 +133,10 @@ ptshare_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *vma)
 	new_vma->vm_mm = host_mm;
 
 	err = insert_vm_struct(host_mm, new_vma);
-	if (err)
+	if (err) {
+		vm_area_free(new_vma);
 		return -ENOMEM;
+	}
 
-	/*
-	 * Copy the PMD entries from host mm to guest so they use the
-	 * same PTEs
-	 */
-	err = ptshare_copy_pmd(host_mm, vma->vm_mm, vma, vma->vm_start);
-
-	return err;
+	return 0;
 }
