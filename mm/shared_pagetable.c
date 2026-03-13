@@ -34,6 +34,9 @@ struct mm_struct ptshare_mm = {
 #ifdef CONFIG_SCHED_MM_CID
 	.mm_cid.lock = __RAW_SPIN_LOCK_UNLOCKED(ptshare_mm.mm_cid.lock),
 #endif
+#ifdef CONFIG_SHARED_PAGETABLE
+	.shpt_mm	= NULL,
+#endif
 	.flexible_array	= MM_STRUCT_FLEXIBLE_ARRAY_INIT,
 	INIT_MM_CONTEXT(ptshare_mm)
 };

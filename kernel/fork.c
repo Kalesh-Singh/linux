@@ -1118,6 +1118,10 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	if (mm_alloc_id(mm))
 		goto fail_noid;
 
+#ifdef CONFIG_SHARED_PAGETABLE
+	mm->shpt_mm = NULL;
+#endif
+
 	if (init_new_context(p, mm))
 		goto fail_nocontext;
 
