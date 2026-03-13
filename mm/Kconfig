@@ -1471,6 +1471,12 @@ config LAZY_MMU_MODE_KUNIT_TEST
 
 	  If unsure, say N.
 
+config SHARED_PAGETABLE
+	bool "Shared Page Table Support"
+	depends on MMU && PER_VMA_LOCK && SPLIT_PTE_PTLOCKS
+	help
+	  Allows sharing of page tables between processes.
+
 source "mm/damon/Kconfig"
 
 endmenu
