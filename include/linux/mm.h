@@ -3352,6 +3352,24 @@ static inline void *ptdesc_address(const struct ptdesc *pt)
 	return folio_address(ptdesc_folio(pt));
 }
 
+/**
+ * ptdesc_get - Increment reference count on a page table descriptor
+ * @pt: The page table descriptor.
+ */
+static inline void ptdesc_get(struct ptdesc *pt)
+{
+	folio_get(ptdesc_folio(pt));
+}
+
+/**
+ * ptdesc_put - Decrement reference count on a page table descriptor
+ * @pt: The page table descriptor.
+ */
+static inline void ptdesc_put(struct ptdesc *pt)
+{
+	folio_put(ptdesc_folio(pt));
+}
+
 static inline bool pagetable_is_reserved(struct ptdesc *pt)
 {
 	return test_bit(PT_reserved, &pt->pt_flags.f);
