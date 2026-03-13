@@ -130,6 +130,8 @@ vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 	vm_fault_t ret;
 	pgd_t *pgd;
 	p4d_t *p4d;
+	spinlock_t *ptl;
+	struct ptdesc *ptdesc;
 
 	ptshare_vma = lock_vma_under_rcu(&ptshare_mm, vmf->address);
 	if (!ptshare_vma) {
@@ -189,6 +191,25 @@ vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 		 */
 		release_fault_lock(vmf);
 	} else {
+		if (!(ret & VM_FAULT_ERROR) && !pmd_none(*ptshare_vmf.pmd)) {
+			/*
+			 * PMD Splicing:
+			 * The ptshare_mm now has a populated PTE page table.
+			 * We "splice" this shared PTE page table directly into the
+			 * faulting process's PMD. We increment the ptdesc refcount
+			 * so the shared page table is not freed prematurely when a
+			 * single sharing process unmaps the region.
+			 */
+			ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
+			if (pmd_none(*vmf->pmd)) {
+				ptdesc = page_ptdesc(pmd_page(*ptshare_vmf.pmd));
+				ptdesc_get(ptdesc);
+				set_pmd_at(vmf->vma->vm_mm, vmf->address, vmf->pmd, *ptshare_vmf.pmd);
+				mm_inc_nr_ptes(vmf->vma->vm_mm);
+			}
+			spin_unlock(ptl);
+		}
+
 		/* Normal completion, release the ptshare_mm lock we acquired */
 		if (ptshare_vmf.flags & FAULT_FLAG_VMA_LOCK)
 			vma_end_read(ptshare_vma);
