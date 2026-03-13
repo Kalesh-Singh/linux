@@ -44,9 +44,10 @@ struct mm_struct ptshare_mm = {
 };
 
 /*
- * We only allow sharing of page tables for read-only file-backed
- * mappings to avoid having to deal with Copy-on-Write (CoW) of
- * the shared page tables.
+ * We only allow sharing of page tables for file-backed mappings.
+ * If the mapping is writable, it must be MAP_SHARED to avoid
+ * having to deal with Copy-on-Write (CoW) of the shared page tables
+ * when the underlying pages are CoW'ed.
  *
  * To simplify the implementation, we only allow sharing of
  * whole page tables (PMD-level sharing), so the mapping must
@@ -64,7 +65,10 @@ int shpt_validate_mmap(struct file *file, unsigned long addr, unsigned long len,
 	if (!(vm_flags & VM_SHARED_PT))
 		return 0;
 
-	if (unlikely(!file || (prot & PROT_WRITE)))
+	if (unlikely(!file))
+		return -EINVAL;
+
+	if (unlikely((prot & PROT_WRITE) && !(flags & MAP_SHARED)))
 		return -EINVAL;
 
 	if (unlikely(!(flags & MAP_FIXED)))
