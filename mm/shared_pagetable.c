@@ -73,11 +73,51 @@ int shpt_validate_mmap(struct file *file, unsigned long addr, unsigned long len,
 		     !IS_ALIGNED(len, PMD_SIZE)))
 		return -EINVAL;
 
-	mmap_read_lock(&ptshare_mm);
+	BUG_ON(current->mm == &ptshare_mm);
+
+	mmap_read_lock_nested(&ptshare_mm, SINGLE_DEPTH_NESTING);
 	vma = find_vma_intersection(&ptshare_mm, addr, addr + len);
 	if (vma)
 		ret = -EINVAL;
 	mmap_read_unlock(&ptshare_mm);
 
 	return ret;
+}
+
+void shpt_install_vma(struct mm_struct *mm, unsigned long addr,
+		      unsigned long len, vm_flags_t vm_flags)
+{
+	struct vm_area_struct *vma, *new_vma;
+	int ret;
+
+	if (IS_ERR_VALUE(addr))
+		return;
+
+	if (!(vm_flags & VM_SHARED_PT))
+		return;
+
+	BUG_ON(mm == &ptshare_mm);
+
+	vma = vma_lookup(mm, addr);
+	BUG_ON(!vma);
+
+	if (!mm->shpt_mm)
+		mm->shpt_mm = &ptshare_mm;
+
+	new_vma = vm_area_dup(vma);
+	if (!new_vma)
+		return;
+
+	new_vma->vm_mm = &ptshare_mm;
+	vm_flags_clear(new_vma, VM_SHARED_PT);
+
+	mmap_write_lock_nested(&ptshare_mm, SINGLE_DEPTH_NESTING);
+	ret = insert_vm_struct(&ptshare_mm, new_vma);
+	if (ret) {
+		mmap_write_unlock(&ptshare_mm);
+		vm_area_free(new_vma);
+		return;
+	}
+	vm_stat_account(&ptshare_mm, new_vma->vm_flags, vma_pages(new_vma));
+	mmap_write_unlock(&ptshare_mm);
 }
