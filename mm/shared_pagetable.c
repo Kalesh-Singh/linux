@@ -133,6 +133,16 @@ vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 
 	ptshare_vma = lock_vma_under_rcu(&ptshare_mm, vmf->address);
 	if (!ptshare_vma) {
+		/*
+		 * If we are under VMA lock, we don't want to wait for
+		 * the shared MM's mmap_lock. Return RETRY so the
+		 * architecture can fall back to mmap_lock.
+		 */
+		if (vmf->flags & FAULT_FLAG_VMA_LOCK) {
+			release_fault_lock(vmf);
+			return VM_FAULT_RETRY;
+		}
+
 		if (mmap_read_lock_killable_nested(&ptshare_mm, SINGLE_DEPTH_NESTING)) {
 			release_fault_lock(vmf);
 			return VM_FAULT_RETRY;
