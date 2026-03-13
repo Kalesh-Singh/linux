@@ -37,3 +37,34 @@ struct mm_struct ptshare_mm = {
 	.flexible_array	= MM_STRUCT_FLEXIBLE_ARRAY_INIT,
 	INIT_MM_CONTEXT(ptshare_mm)
 };
+
+/*
+ * We only allow sharing of page tables for read-only file-backed
+ * mappings to avoid having to deal with Copy-on-Write (CoW) of
+ * the shared page tables.
+ *
+ * To simplify the implementation, we only allow sharing of
+ * whole page tables (PMD-level sharing), so the mapping must
+ * be PMD-aligned and a multiple of PMD_SIZE. This also requires
+ * MAP_FIXED to ensure the address is exactly what the user
+ * requested.
+ */
+int shpt_validate_mmap(struct file *file, unsigned long addr, unsigned long len,
+		       unsigned long prot, unsigned long flags,
+		       vm_flags_t vm_flags)
+{
+	if (!(vm_flags & VM_SHARED_PT))
+		return 0;
+
+	if (unlikely(!file || (prot & PROT_WRITE)))
+		return -EINVAL;
+
+	if (unlikely(!(flags & MAP_FIXED)))
+		return -EINVAL;
+
+	if (unlikely(!IS_ALIGNED(addr, PMD_SIZE) ||
+		     !IS_ALIGNED(len, PMD_SIZE)))
+		return -EINVAL;
+
+	return 0;
+}
