@@ -10,6 +10,7 @@
 #include <linux/atomic.h>
 #include <linux/user_namespace.h>
 #include <asm/mmu.h>
+#include <linux/mm.h>
 #include <linux/shared_pagetable.h>
 
 #ifndef INIT_MM_CONTEXT
@@ -54,8 +55,11 @@ struct mm_struct ptshare_mm = {
  */
 int shpt_validate_mmap(struct file *file, unsigned long addr, unsigned long len,
 		       unsigned long prot, unsigned long flags,
-		       vm_flags_t vm_flags)
+		       vm_flags_t vm_flags, unsigned long pgoff)
 {
+	struct vm_area_struct *vma;
+	int ret = 0;
+
 	if (!(vm_flags & VM_SHARED_PT))
 		return 0;
 
@@ -69,5 +73,11 @@ int shpt_validate_mmap(struct file *file, unsigned long addr, unsigned long len,
 		     !IS_ALIGNED(len, PMD_SIZE)))
 		return -EINVAL;
 
-	return 0;
+	mmap_read_lock(&ptshare_mm);
+	vma = find_vma_intersection(&ptshare_mm, addr, addr + len);
+	if (vma)
+		ret = -EINVAL;
+	mmap_read_unlock(&ptshare_mm);
+
+	return ret;
 }

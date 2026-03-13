@@ -403,7 +403,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	vm_flags |= calc_vm_prot_bits(prot, pkey) | calc_vm_flag_bits(file, flags) |
 			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
 
-	ret = shpt_validate_mmap(file, addr, len, prot, flags, vm_flags);
+	ret = shpt_validate_mmap(file, addr, len, prot, flags, vm_flags, pgoff);
 	if (ret)
 		return ret;
 
