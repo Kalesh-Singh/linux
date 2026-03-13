@@ -12,6 +12,7 @@
 #include <asm/mmu.h>
 #include <linux/mm.h>
 #include <linux/shared_pagetable.h>
+#include "internal.h"
 
 #ifndef INIT_MM_CONTEXT
 #define INIT_MM_CONTEXT(name)
@@ -120,4 +121,77 @@ void shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 	}
 	vm_stat_account(&ptshare_mm, new_vma->vm_flags, vma_pages(new_vma));
 	mmap_write_unlock(&ptshare_mm);
+}
+
+vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *ptshare_vma;
+	struct vm_fault ptshare_vmf = *vmf;
+	vm_fault_t ret;
+	pgd_t *pgd;
+	p4d_t *p4d;
+
+	ptshare_vma = lock_vma_under_rcu(&ptshare_mm, vmf->address);
+	if (!ptshare_vma) {
+		if (mmap_read_lock_killable_nested(&ptshare_mm, SINGLE_DEPTH_NESTING)) {
+			release_fault_lock(vmf);
+			return VM_FAULT_RETRY;
+		}
+
+		ptshare_vma = vma_lookup(&ptshare_mm, vmf->address);
+		if (!ptshare_vma) {
+			mmap_read_unlock(&ptshare_mm);
+			return VM_FAULT_SIGSEGV;
+		}
+		ptshare_vmf.flags &= ~FAULT_FLAG_VMA_LOCK;
+	} else {
+		ptshare_vmf.flags |= FAULT_FLAG_VMA_LOCK;
+	}
+
+	pgd = pgd_offset(&ptshare_mm, vmf->address);
+	p4d = p4d_alloc(&ptshare_mm, pgd, vmf->address);
+	if (!p4d) {
+		ret = VM_FAULT_OOM;
+		goto out;
+	}
+
+	ptshare_vmf.pud = pud_alloc(&ptshare_mm, p4d, vmf->address);
+	if (!ptshare_vmf.pud) {
+		ret = VM_FAULT_OOM;
+		goto out;
+	}
+
+	ptshare_vmf.pmd = pmd_alloc(&ptshare_mm, ptshare_vmf.pud, vmf->address);
+	if (!ptshare_vmf.pmd) {
+		ret = VM_FAULT_OOM;
+		goto out;
+	}
+
+	ptshare_vmf.vma = ptshare_vma;
+	ptshare_vmf.prealloc_pte = NULL;
+
+	ret = handle_pte_fault(&ptshare_vmf);
+
+	if (ret & VM_FAULT_RETRY) {
+		/*
+		 * handle_pte_fault has dropped the ptshare_mm lock.
+		 * Now we must drop the faulting process's lock.
+		 */
+		release_fault_lock(vmf);
+	} else {
+		/* Normal completion, release the ptshare_mm lock we acquired */
+		if (ptshare_vmf.flags & FAULT_FLAG_VMA_LOCK)
+			vma_end_read(ptshare_vma);
+		else
+			mmap_read_unlock(&ptshare_mm);
+	}
+
+	return ret;
+
+out:
+	if (ptshare_vmf.flags & FAULT_FLAG_VMA_LOCK)
+		vma_end_read(ptshare_vma);
+	else
+		mmap_read_unlock(&ptshare_mm);
+	return ret;
 }
