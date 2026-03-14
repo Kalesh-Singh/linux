@@ -16,7 +16,7 @@
 #include <linux/smp.h>
 #include "internal.h"
 
-#ifdef CONFIG_X86
+#if defined(CONFIG_X86) || defined(CONFIG_ARM64)
 #include <asm/tlbflush.h>
 #endif
 
@@ -141,6 +141,31 @@ static void shpt_flush_tlb_ipi(void *data)
 }
 #endif
 
+#ifdef CONFIG_ARM64
+static void shpt_flush_tlb_arm64(const struct mmu_notifier_range *range)
+{
+	unsigned long start = range->start;
+	unsigned long end = range->end;
+	unsigned long stride = PAGE_SIZE;
+	unsigned long pages;
+
+	start = round_down(start, stride);
+	end = round_up(end, stride);
+	pages = (end - start) >> PAGE_SHIFT;
+
+	if (__flush_tlb_range_limit_excess(start, end, pages, stride)) {
+		flush_tlb_all();
+		return;
+	}
+
+	dsb(ishst);
+	__flush_tlb_range_op(vaae1is, start, pages, stride, 0,
+			     TLBI_TTL_UNKNOWN, false, lpa2_is_enabled());
+	__tlbi_sync_s1ish();
+	isb();
+}
+#endif
+
 static int shpt_invalidate_range_start(struct mmu_notifier *mn,
 				       const struct mmu_notifier_range *range)
 {
@@ -149,6 +174,8 @@ static int shpt_invalidate_range_start(struct mmu_notifier *mn,
 
 #ifdef CONFIG_X86
 	on_each_cpu(shpt_flush_tlb_ipi, (void *)range, 1);
+#elif defined(CONFIG_ARM64)
+	shpt_flush_tlb_arm64(range);
 #endif
 
 	return 0;
