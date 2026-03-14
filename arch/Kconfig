@@ -1071,6 +1071,12 @@ config HAVE_MOVE_PMD
 	help
 	  Archs that select this are able to move page tables at the PMD level.
 
+config HAVE_SHARED_PAGETABLE
+	bool
+	help
+	  Architectures that select this are able to share page tables between
+	  processes using the ptshare_mm global headless MM.
+
 config HAVE_ARCH_TRANSPARENT_HUGEPAGE
 	bool
 

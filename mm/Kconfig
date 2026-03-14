@@ -1474,6 +1474,7 @@ config LAZY_MMU_MODE_KUNIT_TEST
 config SHARED_PAGETABLE
 	bool "Shared Page Table Support"
 	depends on MMU && PER_VMA_LOCK && SPLIT_PTE_PTLOCKS && 64BIT
+	depends on HAVE_SHARED_PAGETABLE
 	help
 	  Allows sharing of page tables between processes.
 
