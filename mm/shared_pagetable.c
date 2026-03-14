@@ -167,6 +167,16 @@ static const struct mmu_notifier_ops shpt_mmu_notifier_ops = {
 	.invalidate_range_start = shpt_invalidate_range_start,
 };
 
+static struct mmu_notifier shpt_mmu_notifier = {
+	.ops = &shpt_mmu_notifier_ops,
+};
+
+static int __init shpt_init(void)
+{
+	return mmu_notifier_register(&shpt_mmu_notifier, &ptshare_mm);
+}
+core_initcall(shpt_init);
+
 vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *ptshare_vma;
