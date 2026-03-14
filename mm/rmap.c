@@ -83,6 +83,7 @@
 
 #include "internal.h"
 #include "swap.h"
+#include "vma.h"
 
 static struct kmem_cache *anon_vma_cachep;
 static struct kmem_cache *anon_vma_chain_cachep;
@@ -2967,6 +2968,9 @@ static void rmap_walk_anon(struct folio *folio,
 		VM_BUG_ON_VMA(address == -EFAULT, vma);
 		cond_resched();
 
+		if (unlikely(vma_shares_pagetable(vma)))
+			continue;
+
 		if (rwc->invalid_vma && rwc->invalid_vma(vma, rwc->arg))
 			continue;
 
@@ -3029,6 +3033,9 @@ lookup:
 
 		VM_BUG_ON_VMA(address == -EFAULT, vma);
 		cond_resched();
+
+		if (unlikely(vma_shares_pagetable(vma)))
+			continue;
 
 		if (rwc->invalid_vma && rwc->invalid_vma(vma, rwc->arg))
 			continue;
