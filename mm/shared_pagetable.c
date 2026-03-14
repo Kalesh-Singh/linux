@@ -18,7 +18,6 @@
 
 #ifdef CONFIG_X86
 #include <asm/tlbflush.h>
-extern unsigned long tlb_single_page_flush_ceiling;
 #endif
 
 #ifndef INIT_MM_CONTEXT
@@ -137,16 +136,8 @@ void shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 #ifdef CONFIG_X86
 static void shpt_flush_tlb_ipi(void *data)
 {
-	const struct mmu_notifier_range *range = data;
-	unsigned long addr;
-
-	if ((range->end - range->start) >> PAGE_SHIFT > tlb_single_page_flush_ceiling) {
-		count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
-		__flush_tlb_all();
-	} else {
-		for (addr = range->start; addr < range->end; addr += PAGE_SIZE)
-			flush_tlb_one_user(addr);
-	}
+	count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
+	__flush_tlb_all();
 }
 #endif
 
