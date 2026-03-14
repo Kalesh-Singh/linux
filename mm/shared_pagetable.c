@@ -12,7 +12,14 @@
 #include <asm/mmu.h>
 #include <linux/mm.h>
 #include <linux/shared_pagetable.h>
+#include <linux/mmu_notifier.h>
+#include <linux/smp.h>
 #include "internal.h"
+
+#ifdef CONFIG_X86
+#include <asm/tlbflush.h>
+extern unsigned long tlb_single_page_flush_ceiling;
+#endif
 
 #ifndef INIT_MM_CONTEXT
 #define INIT_MM_CONTEXT(name)
@@ -126,6 +133,39 @@ void shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 	vm_stat_account(&ptshare_mm, new_vma->vm_flags, vma_pages(new_vma));
 	mmap_write_unlock(&ptshare_mm);
 }
+
+#ifdef CONFIG_X86
+static void shpt_flush_tlb_ipi(void *data)
+{
+	const struct mmu_notifier_range *range = data;
+	unsigned long addr;
+
+	if ((range->end - range->start) >> PAGE_SHIFT > tlb_single_page_flush_ceiling) {
+		count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
+		__flush_tlb_all();
+	} else {
+		for (addr = range->start; addr < range->end; addr += PAGE_SIZE)
+			flush_tlb_one_user(addr);
+	}
+}
+#endif
+
+static int shpt_invalidate_range_start(struct mmu_notifier *mn,
+				       const struct mmu_notifier_range *range)
+{
+	if (!mmu_notifier_range_blockable(range))
+		return -EAGAIN;
+
+#ifdef CONFIG_X86
+	on_each_cpu(shpt_flush_tlb_ipi, (void *)range, 1);
+#endif
+
+	return 0;
+}
+
+static const struct mmu_notifier_ops shpt_mmu_notifier_ops = {
+	.invalidate_range_start = shpt_invalidate_range_start,
+};
 
 vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 {
