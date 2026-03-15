@@ -147,9 +147,7 @@ int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 
 static void shpt_vma_init_refcount(struct vm_area_struct *vma)
 {
-	xa_lock(&shpt_refcounts);
 	xa_store(&shpt_refcounts, vma->vm_start, (void *)1, GFP_KERNEL);
-	xa_unlock(&shpt_refcounts);
 }
 
 void shpt_vma_get(struct vm_area_struct *vma)
@@ -158,7 +156,7 @@ void shpt_vma_get(struct vm_area_struct *vma)
 
 	xa_lock(&shpt_refcounts);
 	ref = (unsigned long)xa_load(&shpt_refcounts, vma->vm_start);
-	xa_store(&shpt_refcounts, vma->vm_start, (void *)(ref + 1), GFP_KERNEL);
+	__xa_store(&shpt_refcounts, vma->vm_start, (void *)(ref + 1), GFP_ATOMIC);
 	xa_unlock(&shpt_refcounts);
 }
 
@@ -170,14 +168,14 @@ void shpt_vma_put(struct vm_area_struct *vma)
 	ref = (unsigned long)xa_load(&shpt_refcounts, vma->vm_start);
 	ref--;
 	if (ref == 0) {
-		xa_erase(&shpt_refcounts, vma->vm_start);
+		__xa_erase(&shpt_refcounts, vma->vm_start);
 		xa_unlock(&shpt_refcounts);
 		/* Schedule destruction of the shadow VMA in ptshare_mm */
 		mmap_write_lock_nested(&ptshare_mm, SINGLE_DEPTH_NESTING);
 		do_munmap(&ptshare_mm, vma->vm_start, vma->vm_end - vma->vm_start, NULL);
 		mmap_write_unlock(&ptshare_mm);
 	} else {
-		xa_store(&shpt_refcounts, vma->vm_start, (void *)ref, GFP_KERNEL);
+		__xa_store(&shpt_refcounts, vma->vm_start, (void *)ref, GFP_ATOMIC);
 		xa_unlock(&shpt_refcounts);
 	}
 }
