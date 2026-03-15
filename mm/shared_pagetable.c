@@ -95,17 +95,17 @@ int shpt_validate_mmap(struct file *file, unsigned long addr, unsigned long len,
 	return ret;
 }
 
-void shpt_install_vma(struct mm_struct *mm, unsigned long addr,
+int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 		      unsigned long len, vm_flags_t vm_flags)
 {
 	struct vm_area_struct *vma, *new_vma;
 	int ret;
 
 	if (IS_ERR_VALUE(addr))
-		return;
+		return 0;
 
 	if (!(vm_flags & VM_SHARED_PT))
-		return;
+		return 0;
 
 	BUG_ON(mm == &ptshare_mm);
 
@@ -117,7 +117,7 @@ void shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 
 	new_vma = vm_area_dup(vma);
 	if (!new_vma)
-		return;
+		return -ENOMEM;
 
 	new_vma->vm_mm = &ptshare_mm;
 	vm_flags_clear(new_vma, VM_SHARED_PT);
@@ -127,10 +127,12 @@ void shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 	if (ret) {
 		mmap_write_unlock(&ptshare_mm);
 		vm_area_free(new_vma);
-		return;
+		return ret;
 	}
 	vm_stat_account(&ptshare_mm, new_vma->vm_flags, vma_pages(new_vma));
 	mmap_write_unlock(&ptshare_mm);
+
+	return 0;
 }
 
 #ifdef CONFIG_X86

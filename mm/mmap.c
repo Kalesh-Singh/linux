@@ -564,12 +564,18 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 
 	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf);
 	if (!IS_ERR_VALUE(addr)) {
+		int err;
+
 		if ((vm_flags & VM_LOCKED) ||
 		    (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE)
 			*populate = len;
-	}
 
-	shpt_install_vma(mm, addr, len, vm_flags);
+		err = shpt_install_vma(mm, addr, len, vm_flags);
+		if (unlikely(err)) {
+			do_munmap(mm, addr, len, uf);
+			return err;
+		}
+	}
 
 	return addr;
 }
