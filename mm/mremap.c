@@ -1662,6 +1662,8 @@ static int check_prep_vma(struct vma_remap_struct *vrm)
 	if (!vma)
 		return -EFAULT;
 
+	BUG_ON(vma_shares_pagetable(vma));
+
 	/* If mseal()'d, mremap() is prohibited. */
 	if (vma_is_sealed(vma))
 		return -EPERM;
@@ -1847,6 +1849,8 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 		unsigned long len = min(end, vma->vm_end) - addr;
 		unsigned long offset, res_vma;
 		bool multi_allowed;
+
+		BUG_ON(vma_shares_pagetable(vma));
 
 		/* No gap permitted at the start of the range. */
 		if (!seen_vma && start < vma->vm_start)

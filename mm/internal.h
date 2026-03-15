@@ -18,6 +18,7 @@
 #include <linux/leafops.h>
 #include <linux/swap_cgroup.h>
 #include <linux/tracepoint-defs.h>
+#include <linux/shared_pagetable.h>
 
 /* Internal core VMA manipulation functions. */
 #include "vma.h"
@@ -195,6 +196,9 @@ static inline void vma_close(struct vm_area_struct *vma)
 		 */
 		vma->vm_ops = &vma_dummy_vm_ops;
 	}
+
+	if (vma_shares_pagetable(vma))
+		shpt_vma_put(vma);
 }
 
 /* unmap_vmas is in mm/memory.c */

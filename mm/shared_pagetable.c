@@ -15,6 +15,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/smp.h>
 #include "internal.h"
+#include <linux/xarray.h>
 
 #if defined(CONFIG_X86) || defined(CONFIG_ARM64)
 #include <asm/tlbflush.h>
@@ -23,6 +24,8 @@
 #ifndef INIT_MM_CONTEXT
 #define INIT_MM_CONTEXT(name)
 #endif
+
+static DEFINE_XARRAY(shpt_refcounts);
 
 struct mm_struct ptshare_mm = {
 	.mm_mt		= MTREE_INIT_EXT(mm_mt, MM_MT_FLAGS, ptshare_mm.mmap_lock),
@@ -132,7 +135,30 @@ int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 	vm_stat_account(&ptshare_mm, new_vma->vm_flags, vma_pages(new_vma));
 	mmap_write_unlock(&ptshare_mm);
 
+	xa_store(&shpt_refcounts, new_vma->vm_start, (void *)1, GFP_KERNEL);
+
 	return 0;
+}
+
+void shpt_vma_get(struct vm_area_struct *vma)
+{
+	unsigned long ref = (unsigned long)xa_load(&shpt_refcounts, vma->vm_start);
+
+	xa_store(&shpt_refcounts, vma->vm_start, (void *)(ref + 1), GFP_KERNEL);
+}
+
+void shpt_vma_put(struct vm_area_struct *vma)
+{
+	unsigned long ref = (unsigned long)xa_load(&shpt_refcounts, vma->vm_start);
+
+	ref--;
+	if (ref == 0) {
+		xa_erase(&shpt_refcounts, vma->vm_start);
+		/* Schedule destruction of the shadow VMA in ptshare_mm */
+		do_munmap(&ptshare_mm, vma->vm_start, vma->vm_end - vma->vm_start, NULL);
+	} else {
+		xa_store(&shpt_refcounts, vma->vm_start, (void *)ref, GFP_KERNEL);
+	}
 }
 
 #ifdef CONFIG_X86
