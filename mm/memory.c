@@ -192,6 +192,19 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 {
 	pgtable_t token = pmd_pgtable(*pmd);
 	pmd_clear(pmd);
+
+#ifdef CONFIG_SHARED_PAGETABLE
+	if (tlb->mm != ptshare_mm) {
+		struct ptdesc *pt = page_ptdesc(token);
+
+		if (ptdesc_refcount(pt) > 1) {
+			ptdesc_put(pt);
+			mm_dec_nr_ptes(tlb->mm);
+			return;
+		}
+	}
+#endif
+
 	pte_free_tlb(tlb, token, addr);
 	mm_dec_nr_ptes(tlb->mm);
 }

@@ -3370,6 +3370,11 @@ static inline void ptdesc_put(struct ptdesc *pt)
 	folio_put(ptdesc_folio(pt));
 }
 
+static inline int ptdesc_refcount(struct ptdesc *pt)
+{
+	return folio_ref_count(ptdesc_folio(pt));
+}
+
 static inline bool pagetable_is_reserved(struct ptdesc *pt)
 {
 	return test_bit(PT_reserved, &pt->pt_flags.f);

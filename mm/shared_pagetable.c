@@ -129,10 +129,30 @@ int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 	 * Sanitize the shadow VMA.
 	 *
 	 * Since we are cloning a guest VMA, we must ensure it is isolated
-	 * from the guest's reverse mapping and locking structures.
+	 * from the guest's reverse mapping, locking structures, and
+	 * process-specific metadata.
 	 */
 	new_vma->anon_vma = NULL;
 	INIT_LIST_HEAD(&new_vma->anon_vma_chain);
+
+	/* Sever name and NUMA policy links to the guest MM */
+	free_anon_vma_name(new_vma);
+#ifdef CONFIG_ANON_VMA_NAME
+	new_vma->anon_name = NULL;
+#endif
+
+#ifdef CONFIG_NUMA
+	new_vma->vm_policy = NULL;
+#endif
+
+	/* Reset NUMA balancing state */
+	vma_numab_state_free(new_vma);
+#ifdef CONFIG_NUMA_BALANCING
+	new_vma->numab_state = NULL;
+#endif
+
+	/* Reset per-VMA lock state for the new MM context */
+	vma_lock_init(new_vma, true);
 
 	/*
 	 * Incremement the file reference count and notify the driver
