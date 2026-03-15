@@ -1299,8 +1299,15 @@ static bool can_madvise_modify(struct madvise_behavior *madv_behavior)
 	struct vm_area_struct *vma = madv_behavior->vma;
 
 	/* If the VMA isn't sealed we're good. */
-	if (!vma_is_sealed(vma))
+	if (!vma_is_sealed(vma)) {
+#ifdef CONFIG_SHARED_PAGETABLE
+		if (unlikely(vma_shares_pagetable(vma)) && is_discard(madv_behavior->behavior)) {
+			if (shpt_unshare_vma(vma))
+				return false;
+		}
+#endif
 		return true;
+	}
 
 	/* For a sealed VMA, we only care about discard operations. */
 	if (!is_discard(madv_behavior->behavior))

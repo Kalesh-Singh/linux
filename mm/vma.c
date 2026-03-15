@@ -501,8 +501,13 @@ __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	struct vm_area_struct *new;
 	int err;
 
-	if (unlikely(vma_shares_pagetable(vma)))
-		return -EINVAL;
+#ifdef CONFIG_SHARED_PAGETABLE
+	if (unlikely(vma_shares_pagetable(vma))) {
+		err = shpt_unshare_vma(vma);
+		if (err)
+			return err;
+	}
+#endif
 
 	WARN_ON(vma->vm_start >= addr);
 	WARN_ON(vma->vm_end <= addr);

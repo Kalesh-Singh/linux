@@ -706,6 +706,14 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	if (vma_is_sealed(vma))
 		return -EPERM;
 
+#ifdef CONFIG_SHARED_PAGETABLE
+	if (unlikely(vma_shares_pagetable(vma))) {
+		error = shpt_unshare_vma(vma);
+		if (error)
+			return error;
+	}
+#endif
+
 	if (newflags == oldflags) {
 		*pprev = vma;
 		return 0;
