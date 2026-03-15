@@ -3,7 +3,7 @@
 
 #include <linux/mm_types.h>
 
-extern struct mm_struct ptshare_mm;
+extern struct mm_struct *ptshare_mm;
 
 #ifdef CONFIG_SHARED_PAGETABLE
 vm_fault_t shpt_handle_fault(struct vm_fault *vmf);
