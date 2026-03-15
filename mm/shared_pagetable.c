@@ -18,6 +18,7 @@
 #include <linux/xarray.h>
 #include <linux/pgalloc.h>
 #include <linux/hugetlb.h>
+#include <linux/file.h>
 #include <asm-generic/tlb.h>
 
 #if defined(CONFIG_X86) || defined(CONFIG_ARM64)
@@ -78,7 +79,10 @@ int shpt_validate_mmap(struct file *file, unsigned long addr, unsigned long len,
 	return ret;
 }
 
-static void shpt_vma_init_refcount(struct vm_area_struct *vma);
+static int shpt_vma_init_refcount(struct vm_area_struct *vma)
+{
+	return xa_err(xa_store(&shpt_refcounts, vma->vm_start, (void *)1, GFP_KERNEL));
+}
 
 int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 		      unsigned long len, vm_flags_t vm_flags)
@@ -94,37 +98,74 @@ int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 
 	BUG_ON(mm == ptshare_mm);
 
+	mmap_write_lock_nested(ptshare_mm, SINGLE_DEPTH_NESTING);
+
+	/* Re-check for overlap while holding the write lock */
+	vma = find_vma_intersection(ptshare_mm, addr, addr + len);
+	if (vma) {
+		mmap_write_unlock(ptshare_mm);
+		return -EINVAL;
+	}
+
 	vma = vma_lookup(mm, addr);
-	BUG_ON(!vma);
+	if (!vma) {
+		mmap_write_unlock(ptshare_mm);
+		return -EINVAL;
+	}
 
 	if (!mm->shpt_mm)
 		mm->shpt_mm = ptshare_mm;
 
 	new_vma = vm_area_dup(vma);
-	if (!new_vma)
+	if (!new_vma) {
+		mmap_write_unlock(ptshare_mm);
 		return -ENOMEM;
+	}
 
 	new_vma->vm_mm = ptshare_mm;
 	vm_flags_clear(new_vma, VM_SHARED_PT);
 
-	mmap_write_lock_nested(ptshare_mm, SINGLE_DEPTH_NESTING);
-	ret = insert_vm_struct(ptshare_mm, new_vma);
+	/*
+	 * Sanitize the shadow VMA.
+	 *
+	 * Since we are cloning a guest VMA, we must ensure it is isolated
+	 * from the guest's reverse mapping and locking structures.
+	 */
+	new_vma->anon_vma = NULL;
+	INIT_LIST_HEAD(&new_vma->anon_vma_chain);
+
+	/*
+	 * Incremement the file reference count and notify the driver
+	 * that a new VMA is referencing its file.
+	 */
+	if (new_vma->vm_file)
+		get_file(new_vma->vm_file);
+
+	if (new_vma->vm_ops && new_vma->vm_ops->open)
+		new_vma->vm_ops->open(new_vma);
+
+	ret = shpt_vma_init_refcount(new_vma);
 	if (ret) {
 		mmap_write_unlock(ptshare_mm);
+		if (new_vma->vm_file)
+			fput(new_vma->vm_file);
+		vm_area_free(new_vma);
+		return ret;
+	}
+
+	ret = insert_vm_struct(ptshare_mm, new_vma);
+	if (ret) {
+		xa_erase(&shpt_refcounts, new_vma->vm_start);
+		mmap_write_unlock(ptshare_mm);
+		if (new_vma->vm_file)
+			fput(new_vma->vm_file);
 		vm_area_free(new_vma);
 		return ret;
 	}
 	vm_stat_account(ptshare_mm, new_vma->vm_flags, vma_pages(new_vma));
 	mmap_write_unlock(ptshare_mm);
 
-	shpt_vma_init_refcount(new_vma);
-
 	return 0;
-}
-
-static void shpt_vma_init_refcount(struct vm_area_struct *vma)
-{
-	xa_store(&shpt_refcounts, vma->vm_start, (void *)1, GFP_KERNEL);
 }
 
 void shpt_vma_get(struct vm_area_struct *vma)
