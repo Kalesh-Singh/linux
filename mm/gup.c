@@ -1219,6 +1219,11 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 	if (vma_is_secretmem(vma))
 		return -EFAULT;
 
+#ifdef CONFIG_SHARED_PAGETABLE
+	if (write && unlikely(vma_shares_pagetable(vma)))
+		return -EMLINK;
+#endif
+
 	if (write) {
 		if (!vma_anon &&
 		    !writable_file_mapping_allowed(vma, gup_flags))
@@ -1387,7 +1392,16 @@ static long __get_user_pages(struct mm_struct *mm,
 					ret = -ENOMEM;
 					goto out;
 				}
-				if (check_vma_flags(vma, gup_flags)) {
+				ret = check_vma_flags(vma, gup_flags);
+				if (ret) {
+#ifdef CONFIG_SHARED_PAGETABLE
+					if (ret == -EMLINK) {
+						ret = shpt_unshare_vma(vma);
+						if (ret)
+							goto out;
+						goto retry;
+					}
+#endif
 					ret = -EINVAL;
 					goto out;
 				}
@@ -1409,8 +1423,17 @@ static long __get_user_pages(struct mm_struct *mm,
 				goto out;
 			}
 			ret = check_vma_flags(vma, gup_flags);
-			if (ret)
+			if (ret) {
+#ifdef CONFIG_SHARED_PAGETABLE
+				if (ret == -EMLINK) {
+					ret = shpt_unshare_vma(vma);
+					if (ret)
+						goto out;
+					goto retry;
+				}
+#endif
 				goto out;
+			}
 		}
 retry:
 		/*

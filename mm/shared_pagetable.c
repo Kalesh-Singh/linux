@@ -16,6 +16,9 @@
 #include <linux/smp.h>
 #include "internal.h"
 #include <linux/xarray.h>
+#include <linux/pgalloc.h>
+#include <linux/hugetlb.h>
+#include <asm-generic/tlb.h>
 
 #if defined(CONFIG_X86) || defined(CONFIG_ARM64)
 #include <asm/tlbflush.h>
@@ -177,6 +180,125 @@ void shpt_vma_put(struct vm_area_struct *vma)
 		xa_store(&shpt_refcounts, vma->vm_start, (void *)ref, GFP_KERNEL);
 		xa_unlock(&shpt_refcounts);
 	}
+}
+
+/*
+ * shpt_unshare_vma - Fully sever a VMA from the shared page table infrastructure.
+ *
+ * This function iterates through all PMDs in the VMA, allocates private
+ * page tables for the faulting process, copies the shared PTEs into them,
+ * and increments the page reference and mapcounts so the new private mapping
+ * is correctly tracked by rmap.
+ *
+ * It must be called with the mm->mmap_lock held for writing, as it modifies
+ * vma->vm_flags and safely manipulates page table structures.
+ */
+int shpt_unshare_vma(struct vm_area_struct *vma)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	unsigned long addr;
+
+	if (!vma_shares_pagetable(vma))
+		return 0;
+
+	/* We must be in a write-locked context to modify vma->vm_flags */
+	mmap_assert_write_locked(mm);
+
+	for (addr = vma->vm_start; addr < vma->vm_end; addr += PMD_SIZE) {
+		pgd_t *pgd;
+		p4d_t *p4d;
+		pud_t *pud;
+		pmd_t *pmd;
+		pmd_t pmdval;
+		spinlock_t *ptl;
+		struct ptdesc *new_ptdesc, *old_ptdesc;
+		pte_t *old_ptep, *new_ptep;
+		int i;
+
+		pgd = pgd_offset(mm, addr);
+		if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd)))
+			continue;
+		p4d = p4d_offset(pgd, addr);
+		if (p4d_none(*p4d) || unlikely(p4d_bad(*p4d)))
+			continue;
+		pud = pud_offset(p4d, addr);
+		if (pud_none(*pud) || unlikely(pud_bad(*pud)))
+			continue;
+		pmd = pmd_offset(pud, addr);
+		pmdval = pmdp_get_lockless(pmd);
+
+		/* Skip if the PMD is empty, huge, or not present */
+		if (pmd_none(pmdval) || !pmd_present(pmdval) || pmd_trans_huge(pmdval))
+			continue;
+
+		/* Allocate the new private page table */
+		new_ptdesc = page_ptdesc(pte_alloc_one(mm));
+		if (!new_ptdesc)
+			return -ENOMEM;
+
+		ptl = pmd_lock(mm, pmd);
+		if (unlikely(!pmd_same(*pmd, pmdval))) {
+			/* PMD changed under us, abort and retry */
+			spin_unlock(ptl);
+			pte_free(mm, ptdesc_page(new_ptdesc));
+			continue;
+		}
+
+		old_ptdesc = page_ptdesc(pmd_page(*pmd));
+
+		old_ptep = pte_offset_map(pmd, addr);
+		new_ptep = (pte_t *)page_address(ptdesc_page(new_ptdesc));
+
+		/* Copy PTEs and elevate refcounts so rmap sees the new mapping */
+		for (i = 0; i < PTRS_PER_PTE; i++) {
+			pte_t pte = ptep_get(old_ptep + i);
+
+			if (pte_present(pte)) {
+				struct page *page = pte_page(pte);
+
+				folio_get(page_folio(page));
+				folio_add_file_rmap_pte(page_folio(page), page, vma);
+			}
+
+			set_pte_at(mm, addr + i * PAGE_SIZE, new_ptep + i, pte);
+		}
+
+		/* Atomically detach the old shared page table from the PMD */
+		pmd_clear(pmd);
+		/* Install the newly populated private page table */
+		pmd_populate(mm, pmd, ptdesc_page(new_ptdesc));
+
+		spin_unlock(ptl);
+		pte_unmap(old_ptep);
+
+		/* Drop the reference we held from the initial PMD splice */
+		ptdesc_put(old_ptdesc);
+	}
+
+	/*
+	 * Explicit IPI broadcast synchronization.
+	 *
+	 * Because gup_fast() locklessly walks page tables with local
+	 * interrupts disabled, we cannot safely consider the unshare complete
+	 * until we guarantee no CPU is currently walking the old shared page
+	 * tables through this process's page directory.
+	 *
+	 * tlb_remove_table_sync_one() broadcasts an IPI. Any CPU executing
+	 * gup_fast() cannot acknowledge the IPI until it re-enables interrupts,
+	 * meaning it has finished its lockless walk.
+	 */
+	tlb_remove_table_sync_one();
+
+	/*
+	 * Remove the VM_SHARED_PT flag. From this point forward, the VMA is
+	 * a normal private file-backed mapping, and rmap will no longer skip it.
+	 */
+	vm_flags_clear(vma, VM_SHARED_PT);
+
+	/* Drop our reference to the ptshare_mm shadow VMA */
+	shpt_vma_put(vma);
+
+	return 0;
 }
 
 #ifdef CONFIG_X86

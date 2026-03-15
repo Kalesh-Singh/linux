@@ -14,6 +14,7 @@ int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 		      unsigned long len, vm_flags_t vm_flags);
 void shpt_vma_get(struct vm_area_struct *vma);
 void shpt_vma_put(struct vm_area_struct *vma);
+int shpt_unshare_vma(struct vm_area_struct *vma);
 #else
 static inline vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 {
@@ -36,6 +37,10 @@ static inline void shpt_vma_get(struct vm_area_struct *vma)
 }
 static inline void shpt_vma_put(struct vm_area_struct *vma)
 {
+}
+static inline int shpt_unshare_vma(struct vm_area_struct *vma)
+{
+	return 0;
 }
 #endif
 
