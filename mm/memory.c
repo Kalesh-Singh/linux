@@ -2019,6 +2019,12 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 			addr = next;
 			continue;
 		}
+
+		if (unlikely(vma_shares_pagetable(vma))) {
+			addr = next;
+			continue;
+		}
+
 		addr = zap_pte_range(tlb, vma, pmd, addr, next, details);
 		if (addr != next)
 			pmd--;
