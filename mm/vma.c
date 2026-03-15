@@ -501,7 +501,8 @@ __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	struct vm_area_struct *new;
 	int err;
 
-	BUG_ON(vma_shares_pagetable(vma));
+	if (unlikely(vma_shares_pagetable(vma)))
+		return -EINVAL;
 
 	WARN_ON(vma->vm_start >= addr);
 	WARN_ON(vma->vm_end <= addr);
