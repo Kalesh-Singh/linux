@@ -10,26 +10,26 @@ extern struct mm_struct *ptshare_mm;
 #define shpt_err(fmt, ...) \
 do { \
 	if (!strcmp(current->comm, "ptshare_test")) \
-		pr_err("shpt [%i (%s)]: " fmt, task_pid_nr(current), current->comm, ## __VA_ARGS__); \
+		pr_err("SHPT_DEBUG: [%i (%s)]: " fmt, task_pid_nr(current), current->comm, ## __VA_ARGS__); \
 } while (0)
 
 #define shpt_info(fmt, ...) \
 do { \
 	if (!strcmp(current->comm, "ptshare_test")) \
-		pr_info("shpt [%i (%s)]: " fmt, task_pid_nr(current), current->comm, ## __VA_ARGS__); \
+		pr_info("SHPT_DEBUG: [%i (%s)]: " fmt, task_pid_nr(current), current->comm, ## __VA_ARGS__); \
 } while (0)
 
 #define shpt_mm_err(mm, fmt, ...) \
 do { \
 	if (!strcmp(current->comm, "ptshare_test")) \
-		pr_err("shpt [%i (%s)] [%s]: " fmt, task_pid_nr(current), current->comm, \
+		pr_err("SHPT_DEBUG: [%i (%s)] [%s]: " fmt, task_pid_nr(current), current->comm, \
 		       (mm == ptshare_mm ? "ptshare_mm" : "private_mm"), ## __VA_ARGS__); \
 } while (0)
 
 #define shpt_mm_info(mm, fmt, ...) \
 do { \
 	if (!strcmp(current->comm, "ptshare_test")) \
-		pr_info("shpt [%i (%s)] [%s]: " fmt, task_pid_nr(current), current->comm, \
+		pr_info("SHPT_DEBUG: [%i (%s)] [%s]: " fmt, task_pid_nr(current), current->comm, \
 		       (mm == ptshare_mm ? "ptshare_mm" : "private_mm"), ## __VA_ARGS__); \
 } while (0)
 
