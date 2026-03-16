@@ -355,6 +355,9 @@ static void vma_complete(struct vma_prepare *vp, struct vma_iterator *vmi,
 		 */
 		vma_iter_store_new(vmi, vp->insert);
 		mm->map_count++;
+		shpt_mm_info(mm, "vma_complete (insert): addr 0x%lx len 0x%lx map_count %d\n",
+			     vp->insert->vm_start, vp->insert->vm_end - vp->insert->vm_start,
+			     mm->map_count);
 	}
 
 	if (vp->anon_vma) {
@@ -1323,6 +1326,9 @@ static void vms_complete_munmap_vmas(struct vma_munmap_struct *vms,
 	struct mm_struct *mm;
 
 	mm = current->mm;
+	shpt_mm_info(mm, "vms_complete_munmap_vmas: start 0x%lx len 0x%lx count %d map_count %d -> %d\n",
+		     vms->start, vms->end - vms->start, vms->vma_count,
+		     mm->map_count, mm->map_count - vms->vma_count);
 	mm->map_count -= vms->vma_count;
 	mm->locked_vm -= vms->locked_vm;
 	if (vms->unlock)
@@ -1841,6 +1847,8 @@ static int vma_link(struct mm_struct *mm, struct vm_area_struct *vma)
 	vma_iter_store_new(&vmi, vma);
 	vma_link_file(vma, /* hold_rmap_lock= */false);
 	mm->map_count++;
+	shpt_mm_info(mm, "vma_link: addr 0x%lx len 0x%lx map_count %d\n",
+		     vma->vm_start, vma->vm_end - vma->vm_start, mm->map_count);
 	validate_mm(mm);
 	return 0;
 }

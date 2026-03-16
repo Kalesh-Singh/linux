@@ -1833,6 +1833,8 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		vma_iter_bulk_store(&vmi, tmp);
 
 		mm->map_count++;
+		shpt_mm_info(mm, "dup_mmap: addr 0x%lx len 0x%lx map_count %d\n",
+			     tmp->vm_start, tmp->vm_end - tmp->vm_start, mm->map_count);
 
 		if (tmp->vm_ops && tmp->vm_ops->open)
 			tmp->vm_ops->open(tmp);

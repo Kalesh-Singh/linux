@@ -182,6 +182,8 @@ int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 		vm_area_free(new_vma);
 		return ret;
 	}
+	shpt_mm_info(ptshare_mm, "shpt_install_vma: addr 0x%lx len 0x%lx map_count %d\n",
+		     addr, len, ptshare_mm->map_count);
 	vm_stat_account(ptshare_mm, new_vma->vm_flags, vma_pages(new_vma));
 	mmap_write_unlock(ptshare_mm);
 
@@ -208,6 +210,8 @@ void shpt_vma_put(struct vm_area_struct *vma)
 	if (ref == 0) {
 		__xa_erase(&shpt_refcounts, vma->vm_start);
 		xa_unlock(&shpt_refcounts);
+		shpt_mm_info(ptshare_mm, "shpt_vma_put: unmapping 0x%lx len 0x%lx\n",
+			     vma->vm_start, vma->vm_end - vma->vm_start);
 		/* Schedule destruction of the shadow VMA in ptshare_mm */
 		mmap_write_lock_nested(ptshare_mm, SINGLE_DEPTH_NESTING);
 		do_munmap(ptshare_mm, vma->vm_start, vma->vm_end - vma->vm_start, NULL);
@@ -330,6 +334,9 @@ int shpt_unshare_vma(struct vm_area_struct *vma)
 	 * a normal private file-backed mapping, and rmap will no longer skip it.
 	 */
 	vm_flags_clear(vma, VM_SHARED_PT);
+
+	shpt_mm_info(mm, "shpt_unshare_vma: addr 0x%lx len 0x%lx\n",
+		     vma->vm_start, vma->vm_end - vma->vm_start);
 
 	/* Drop our reference to the ptshare_mm shadow VMA */
 	shpt_vma_put(vma);
