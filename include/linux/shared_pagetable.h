@@ -2,6 +2,21 @@
 #define _LINUX_SHARED_PAGETABLE_H
 
 #include <linux/mm_types.h>
+#include <linux/sched.h>
+
+#define shpt_err(fmt, ...) \
+	pr_err("shpt [%i (%s)]: " fmt, task_pid_nr(current), current->comm, ## __VA_ARGS__)
+
+#define shpt_info(fmt, ...) \
+	pr_info("shpt [%i (%s)]: " fmt, task_pid_nr(current), current->comm, ## __VA_ARGS__)
+
+#define shpt_mm_err(mm, fmt, ...) \
+	pr_err("shpt [%i (%s)] [%s]: " fmt, task_pid_nr(current), current->comm, \
+	       (mm == ptshare_mm ? "ptshare_mm" : "private_mm"), ## __VA_ARGS__)
+
+#define shpt_mm_info(mm, fmt, ...) \
+	pr_info("shpt [%i (%s)] [%s]: " fmt, task_pid_nr(current), current->comm, \
+	       (mm == ptshare_mm ? "ptshare_mm" : "private_mm"), ## __VA_ARGS__)
 
 extern struct mm_struct *ptshare_mm;
 
