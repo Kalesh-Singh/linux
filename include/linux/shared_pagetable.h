@@ -46,6 +46,8 @@ int shpt_unshare_vma(struct vm_area_struct *vma);
 int shpt_unshare_remote_vma(struct mm_struct *mm, unsigned long addr, bool write);
 int shpt_unshare_madvise_range(struct mm_struct *mm, unsigned long start,
 			      unsigned long len, int behavior);
+int shpt_unshare_madvise_vector_range(struct mm_struct *mm, struct iov_iter *iter,
+				      int behavior);
 #else
 static inline vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 {
@@ -79,6 +81,12 @@ static inline int shpt_unshare_remote_vma(struct mm_struct *mm, unsigned long ad
 }
 static inline int shpt_unshare_madvise_range(struct mm_struct *mm, unsigned long start,
 					     unsigned long len, int behavior)
+{
+	return 0;
+}
+static inline int shpt_unshare_madvise_vector_range(struct mm_struct *mm,
+						    struct iov_iter *iter,
+						    int behavior)
 {
 	return 0;
 }

@@ -20,6 +20,7 @@
 #include <linux/pgalloc.h>
 #include <linux/hugetlb.h>
 #include <linux/file.h>
+#include <linux/uio.h>
 #include <asm-generic/tlb.h>
 
 #if defined(CONFIG_X86) || defined(CONFIG_ARM64)
@@ -472,7 +473,7 @@ int shpt_unshare_madvise_range(struct mm_struct *mm, unsigned long start,
 
 	/* 
 	 * Transition to write lock. We drop the read lock and acquire
-	 * the write lock directly as requested.
+	 * the write lock directly.
 	 */
 	mmap_read_unlock(mm);
 	if (mmap_write_lock_killable(mm))
@@ -496,6 +497,38 @@ int shpt_unshare_madvise_range(struct mm_struct *mm, unsigned long start,
 
 	mmap_write_unlock(mm);
 	return 1;
+}
+
+/*
+ * shpt_unshare_madvise_vector_range - Unshare all shared VMAs in a vector.
+ * @mm: Target process MM.
+ * @iter: Iterator over address ranges.
+ * @behavior: madvise behavior.
+ *
+ * This function is used by vector_madvise() to ensure all VMAs in all ranges
+ * of the vector are privatized before performing discard operations.
+ *
+ * Returns:
+ *  0: Success (no unsharing needed or completed).
+ * -errno: Error.
+ */
+int shpt_unshare_madvise_vector_range(struct mm_struct *mm, struct iov_iter *iter,
+				      int behavior)
+{
+	struct iov_iter i = *iter;
+
+	while (iov_iter_count(&i)) {
+		unsigned long start = (unsigned long)iter_iov_addr(&i);
+		size_t len = iter_iov_len(&i);
+		int ret;
+
+		ret = shpt_unshare_madvise_range(mm, start, len, behavior);
+		if (ret < 0)
+			return ret;
+		iov_iter_advance(&i, len);
+	}
+
+	return 0;
 }
 
 #ifdef CONFIG_X86

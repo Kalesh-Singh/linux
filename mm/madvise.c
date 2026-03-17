@@ -2066,6 +2066,16 @@ static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 
 	total_len = iov_iter_count(iter);
 
+#ifdef CONFIG_SHARED_PAGETABLE
+	/*
+	 * Pre-flight unsharing: Ensure all VMAs in all ranges of the vector
+	 * are privatized before performing discard operations.
+	 */
+	ret = shpt_unshare_madvise_vector_range(mm, iter, behavior);
+	if (ret < 0)
+		return ret;
+#endif
+
 	ret = madvise_lock(&madv_behavior);
 	if (ret)
 		return ret;
@@ -2080,27 +2090,6 @@ static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 			ret = error;
 			goto next_iov;
 		}
-
-#ifdef CONFIG_SHARED_PAGETABLE
-		/*
-		 * Pre-flight unsharing: Ensure all VMAs in the range are privatized
-		 * before performing discard operations. This must be done without
-		 * holding the madvise_lock.
-		 */
-		madvise_finish_tlb(&madv_behavior);
-		madvise_unlock(&madv_behavior);
-		error = shpt_unshare_madvise_range(mm, start, len_in, behavior);
-		if (unlikely(error < 0)) {
-			ret = error;
-			goto out;
-		}
-		error = madvise_lock(&madv_behavior);
-		if (error) {
-			ret = error;
-			goto out;
-		}
-		madvise_init_tlb(&madv_behavior);
-#endif
 
 		ret = madvise_do_behavior(start, len_in, &madv_behavior);
 		/*
