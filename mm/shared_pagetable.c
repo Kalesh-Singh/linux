@@ -242,6 +242,9 @@ int shpt_unshare_vma(struct vm_area_struct *vma)
 	struct mm_struct *mm = vma->vm_mm;
 	unsigned long addr;
 
+	shpt_mm_info(mm, "shpt_unshare_vma: addr 0x%lx len 0x%lx\n",
+		     vma->vm_start, vma->vm_end - vma->vm_start);
+
 	if (!vma_shares_pagetable(vma))
 		return 0;
 
@@ -424,6 +427,8 @@ vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 	spinlock_t *ptl;
 	struct ptdesc *ptdesc;
 
+	shpt_mm_info(vmf->vma->vm_mm, "shpt_handle_fault: addr 0x%lx flags 0x%x\n", vmf->address, vmf->flags);
+
 	ptshare_vma = lock_vma_under_rcu(ptshare_mm, vmf->address);
 	if (!ptshare_vma) {
 		/*
@@ -497,6 +502,7 @@ vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 				ptdesc_get(ptdesc);
 				set_pmd_at(vmf->vma->vm_mm, vmf->address, vmf->pmd, *ptshare_vmf.pmd);
 				mm_inc_nr_ptes(vmf->vma->vm_mm);
+				shpt_mm_info(vmf->vma->vm_mm, "shpt_handle_fault: spliced PMD at 0x%lx\n", vmf->address);
 			}
 			spin_unlock(ptl);
 		}

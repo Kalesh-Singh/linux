@@ -5,6 +5,7 @@
 #include <linux/spinlock.h>
 
 #include <linux/mm.h>
+#include <linux/shared_pagetable.h>
 #include <linux/memfd.h>
 #include <linux/memremap.h>
 #include <linux/pagemap.h>
@@ -1118,6 +1119,7 @@ static int faultin_page(struct vm_area_struct *vma,
 		fault_flags |= FAULT_FLAG_TRIED;
 	}
 	if (unshare) {
+		shpt_mm_info(vma->vm_mm, "faultin_page: unsharing addr 0x%lx\n", address);
 		fault_flags |= FAULT_FLAG_UNSHARE;
 		/* FAULT_FLAG_WRITE and FAULT_FLAG_UNSHARE are incompatible */
 		VM_WARN_ON_ONCE(fault_flags & FAULT_FLAG_WRITE);
@@ -1396,9 +1398,13 @@ static long __get_user_pages(struct mm_struct *mm,
 				if (ret) {
 #ifdef CONFIG_SHARED_PAGETABLE
 					if (ret == -EMLINK) {
+						shpt_mm_info(mm, "__get_user_pages (madvise): unsharing addr 0x%lx len 0x%lx\n",
+							     vma->vm_start, vma->vm_end - vma->vm_start);
 						ret = shpt_unshare_vma(vma);
-						if (ret)
+						if (ret) {
+							shpt_mm_err(mm, "__get_user_pages (madvise): unshare failed ret %li\n", ret);
 							goto out;
+						}
 						goto retry;
 					}
 #endif
@@ -1426,9 +1432,13 @@ static long __get_user_pages(struct mm_struct *mm,
 			if (ret) {
 #ifdef CONFIG_SHARED_PAGETABLE
 				if (ret == -EMLINK) {
+					shpt_mm_info(mm, "__get_user_pages: unsharing addr 0x%lx len 0x%lx\n",
+						     vma->vm_start, vma->vm_end - vma->vm_start);
 					ret = shpt_unshare_vma(vma);
-					if (ret)
+					if (ret) {
+						shpt_mm_err(mm, "__get_user_pages: unshare failed ret %li\n", ret);
 						goto out;
+					}
 					goto retry;
 				}
 #endif
@@ -1448,6 +1458,8 @@ retry:
 
 		page = follow_page_mask(vma, start, gup_flags, &page_mask);
 		if (!page || PTR_ERR(page) == -EMLINK) {
+			if (PTR_ERR(page) == -EMLINK)
+				shpt_mm_info(mm, "__get_user_pages (follow_page_mask): -EMLINK at addr 0x%lx\n", start);
 			ret = faultin_page(vma, start, gup_flags,
 					   PTR_ERR(page) == -EMLINK, locked);
 			switch (ret) {
