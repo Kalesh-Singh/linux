@@ -711,6 +711,8 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 		error = shpt_unshare_vma(vma);
 		if (error)
 			return error;
+		/* Ensure the flag is not restored by vm_flags_reset_once below */
+		newflags &= ~VM_SHARED_PT;
 	}
 #endif
 
