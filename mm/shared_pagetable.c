@@ -81,7 +81,7 @@ int shpt_validate_mmap(struct file *file, unsigned long addr, unsigned long len,
 
 static int shpt_vma_init_refcount(struct vm_area_struct *vma)
 {
-	return xa_err(xa_store(&shpt_refcounts, vma->vm_start, (void *)1, GFP_KERNEL));
+	return xa_err(xa_store(&shpt_refcounts, vma->vm_start, xa_mk_value(1), GFP_KERNEL));
 }
 
 int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
@@ -193,19 +193,23 @@ int shpt_install_vma(struct mm_struct *mm, unsigned long addr,
 void shpt_vma_get(struct vm_area_struct *vma)
 {
 	unsigned long ref;
+	void *entry;
 
 	xa_lock(&shpt_refcounts);
-	ref = (unsigned long)xa_load(&shpt_refcounts, vma->vm_start);
-	__xa_store(&shpt_refcounts, vma->vm_start, (void *)(ref + 1), GFP_ATOMIC);
+	entry = xa_load(&shpt_refcounts, vma->vm_start);
+	ref = xa_to_value(entry);
+	__xa_store(&shpt_refcounts, vma->vm_start, xa_mk_value(ref + 1), GFP_ATOMIC);
 	xa_unlock(&shpt_refcounts);
 }
 
 void shpt_vma_put(struct vm_area_struct *vma)
 {
 	unsigned long ref;
+	void *entry;
 
 	xa_lock(&shpt_refcounts);
-	ref = (unsigned long)xa_load(&shpt_refcounts, vma->vm_start);
+	entry = xa_load(&shpt_refcounts, vma->vm_start);
+	ref = xa_to_value(entry);
 	ref--;
 	if (ref == 0) {
 		__xa_erase(&shpt_refcounts, vma->vm_start);
@@ -217,7 +221,7 @@ void shpt_vma_put(struct vm_area_struct *vma)
 		do_munmap(ptshare_mm, vma->vm_start, vma->vm_end - vma->vm_start, NULL);
 		mmap_write_unlock(ptshare_mm);
 	} else {
-		__xa_store(&shpt_refcounts, vma->vm_start, (void *)ref, GFP_ATOMIC);
+		__xa_store(&shpt_refcounts, vma->vm_start, xa_mk_value(ref), GFP_ATOMIC);
 		xa_unlock(&shpt_refcounts);
 	}
 }
