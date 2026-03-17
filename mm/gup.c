@@ -1086,8 +1086,7 @@ unmap:
  * to 0 and -EBUSY returned.
  */
 static int faultin_page(struct vm_area_struct *vma,
-		unsigned long address, unsigned int flags, bool unshare,
-		int *locked)
+		unsigned long address, unsigned int flags, int *locked)
 {
 	unsigned int fault_flags = 0;
 	vm_fault_t ret;
@@ -1117,12 +1116,6 @@ static int faultin_page(struct vm_area_struct *vma,
 		 * can co-exist
 		 */
 		fault_flags |= FAULT_FLAG_TRIED;
-	}
-	if (unshare) {
-		shpt_mm_info(vma->vm_mm, "faultin_page: unsharing addr 0x%lx\n", address);
-		fault_flags |= FAULT_FLAG_UNSHARE;
-		/* FAULT_FLAG_WRITE and FAULT_FLAG_UNSHARE are incompatible */
-		VM_WARN_ON_ONCE(fault_flags & FAULT_FLAG_WRITE);
 	}
 
 	ret = handle_mm_fault(vma, address, fault_flags, NULL);
@@ -1441,11 +1434,14 @@ retry:
 		cond_resched();
 
 		page = follow_page_mask(vma, start, gup_flags, &page_mask);
-		if (!page || PTR_ERR(page) == -EMLINK) {
-			if (PTR_ERR(page) == -EMLINK)
-				shpt_mm_info(mm, "__get_user_pages (follow_page_mask): -EMLINK at addr 0x%lx\n", start);
-			ret = faultin_page(vma, start, gup_flags,
-					   PTR_ERR(page) == -EMLINK, locked);
+		if (PTR_ERR(page) == -EMLINK) {
+			shpt_mm_info(mm, "__get_user_pages (follow_page_mask): -EMLINK at addr 0x%lx\n", start);
+			ret = -EMLINK;
+			goto out;
+		}
+
+		if (!page) {
+			ret = faultin_page(vma, start, gup_flags, locked);
 			switch (ret) {
 			case 0:
 				goto retry;

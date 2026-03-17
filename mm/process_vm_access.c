@@ -7,6 +7,7 @@
 
 #include <linux/compat.h>
 #include <linux/mm.h>
+#include <linux/shared_pagetable.h>
 #include <linux/uio.h>
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
@@ -103,9 +104,22 @@ static int process_vm_rw_single_vec(unsigned long addr,
 		 * current/current->mm
 		 */
 		mmap_read_lock(mm);
+retry:
+		if (shpt_unshare_remote_vma(mm, pa, vm_write) < 0) {
+			mmap_read_unlock(mm);
+			return -EFAULT;
+		}
+
 		pinned_pages = pin_user_pages_remote(mm, pa, pinned_pages,
 						     flags, process_pages,
 						     &locked);
+
+		if (pinned_pages == -EMLINK) {
+			if (!locked)
+				mmap_read_lock(mm);
+			goto retry;
+		}
+
 		if (locked)
 			mmap_read_unlock(mm);
 		if (pinned_pages <= 0)

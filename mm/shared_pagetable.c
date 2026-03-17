@@ -6,6 +6,7 @@
 #include <linux/list.h>
 #include <linux/cpumask.h>
 #include <linux/mman.h>
+#include <linux/mmap_lock.h>
 #include <linux/pgtable.h>
 #include <linux/atomic.h>
 #include <linux/user_namespace.h>
@@ -349,6 +350,92 @@ int shpt_unshare_vma(struct vm_area_struct *vma)
 	shpt_vma_put(vma);
 
 	return 0;
+}
+
+/*
+ * shpt_unshare_remote_vma - Safely unshare a VMA in a remote address space.
+ * @mm: Target process MM.
+ * @addr: Address being accessed.
+ * @write: Whether the access is a write.
+ *
+ * This function performs the necessary lock transition (read to write) to
+ * unshare a VMA. It should be called while holding the mmap read lock.
+ *
+ * Returns:
+ *  0: No unsharing was needed, read lock still held.
+ *  1: Unsharing successful, read lock re-acquired (caller should retry).
+ * -errno: Error (lock dropped on failure).
+ */
+int shpt_unshare_remote_vma(struct mm_struct *mm, unsigned long addr, bool write)
+{
+	struct vm_area_struct *vma;
+	int ret;
+
+	if (!write)
+		return 0;
+
+	vma = vma_lookup(mm, addr);
+	if (!vma || !vma_shares_pagetable(vma))
+		return 0;
+
+	if (!upgrade_mmap_lock_carefully(mm, NULL))
+		return -EINTR;
+
+	/* Re-verify VMA after acquiring write lock */
+	vma = vma_lookup(mm, addr);
+	if (vma && vma_shares_pagetable(vma)) {
+		ret = shpt_unshare_vma(vma);
+		if (ret) {
+			mmap_write_unlock(mm);
+			return ret;
+		}
+	}
+
+	mmap_write_downgrade(mm);
+	return 1;
+}
+
+/*
+ * shpt_unshare_remote_vma - Safely unshare a VMA in a remote address space.
+ * @mm: Target process MM.
+ * @addr: Address being accessed.
+ * @write: Whether the access is a write.
+ *
+ * This function performs the necessary lock transition (read to write) to
+ * unshare a VMA. It should be called while holding the mmap read lock.
+ *
+ * Returns:
+ *  0: No unsharing was needed, read lock still held.
+ *  1: Unsharing successful, read lock re-acquired (caller should retry).
+ * -errno: Error (lock dropped on failure).
+ */
+int shpt_unshare_remote_vma(struct mm_struct *mm, unsigned long addr, bool write)
+{
+	struct vm_area_struct *vma;
+	int ret;
+
+	if (!write)
+		return 0;
+
+	vma = vma_lookup(mm, addr);
+	if (!vma || !vma_shares_pagetable(vma))
+		return 0;
+
+	if (!upgrade_mmap_lock_carefully(mm, NULL))
+		return -EINTR;
+
+	/* Re-verify VMA after acquiring write lock */
+	vma = vma_lookup(mm, addr);
+	if (vma && vma_shares_pagetable(vma)) {
+		ret = shpt_unshare_vma(vma);
+		if (ret) {
+			mmap_write_unlock(mm);
+			return ret;
+		}
+	}
+
+	mmap_write_downgrade(mm);
+	return 1;
 }
 
 #ifdef CONFIG_X86
