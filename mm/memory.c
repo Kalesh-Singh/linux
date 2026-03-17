@@ -6977,12 +6977,16 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 {
 	void *old_buf = buf;
 	int write = gup_flags & FOLL_WRITE;
+	int ret;
 
 	if (mmap_read_lock_killable(mm))
 		return 0;
 
-	if (shpt_unshare_remote_vma(mm, addr, write) < 0)
+	ret = shpt_unshare_remote_vma(mm, addr, write);
+	if (ret < 0) {
+		shpt_mm_err(mm, "__access_remote_vm: shpt_unshare_remote_vma failed ret %d\n", ret);
 		return 0;
+	}
 
 	/* Untag the address before looking up the VMA */
 	addr = untagged_addr_remote(mm, addr);
@@ -7001,12 +7005,17 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 							     gup_flags, &vma);
 
 		if (PTR_ERR(page) == -EMLINK) {
-			if (shpt_unshare_remote_vma(mm, addr, true) < 0)
+			shpt_mm_info(mm, "__access_remote_vm: -EMLINK at addr 0x%lx, unsharing\n", addr);
+			ret = shpt_unshare_remote_vma(mm, addr, true);
+			if (ret < 0) {
+				shpt_mm_err(mm, "__access_remote_vm (EMLINK): shpt_unshare_remote_vma failed ret %d\n", ret);
 				return buf - old_buf;
+			}
 			continue;
 		}
 
 		if (IS_ERR(page)) {
+			shpt_mm_err(mm, "__access_remote_vm: GUP failed at addr 0x%lx ret %ld\n", addr, PTR_ERR(page));
 			/* We might need to expand the stack to access it */
 			vma = vma_lookup(mm, addr);
 			if (!vma) {

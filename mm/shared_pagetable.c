@@ -242,6 +242,7 @@ int shpt_unshare_vma(struct vm_area_struct *vma)
 {
 	struct mm_struct *mm = vma->vm_mm;
 	unsigned long addr;
+	int unshared_pmds = 0;
 
 	shpt_mm_info(mm, "shpt_unshare_vma: addr 0x%lx len 0x%lx\n",
 		     vma->vm_start, vma->vm_end - vma->vm_start);
@@ -321,6 +322,7 @@ int shpt_unshare_vma(struct vm_area_struct *vma)
 
 		/* Drop the reference we held from the initial PMD splice */
 		ptdesc_put(old_ptdesc);
+		unshared_pmds++;
 	}
 
 	/*
@@ -343,8 +345,8 @@ int shpt_unshare_vma(struct vm_area_struct *vma)
 	 */
 	vm_flags_clear(vma, VM_SHARED_PT);
 
-	shpt_mm_info(mm, "shpt_unshare_vma: addr 0x%lx len 0x%lx\n",
-		     vma->vm_start, vma->vm_end - vma->vm_start);
+	shpt_mm_info(mm, "shpt_unshare_vma: unshared %d PMDs, addr 0x%lx len 0x%lx\n",
+		     unshared_pmds, vma->vm_start, vma->vm_end - vma->vm_start);
 
 	/* Drop our reference to the ptshare_mm shadow VMA */
 	shpt_vma_put(vma);
@@ -375,20 +377,31 @@ int shpt_unshare_remote_vma(struct mm_struct *mm, unsigned long addr, bool write
 		return 0;
 
 	vma = vma_lookup(mm, addr);
-	if (!vma || !vma_shares_pagetable(vma))
+	if (!vma)
 		return 0;
 
-	if (!upgrade_mmap_lock_carefully(mm, NULL))
+	if (!vma_shares_pagetable(vma))
+		return 0;
+
+	shpt_mm_info(mm, "shpt_unshare_remote_vma: addr 0x%lx intent to unshare\n", addr);
+
+	if (!upgrade_mmap_lock_carefully(mm, NULL)) {
+		shpt_mm_err(mm, "shpt_unshare_remote_vma: lock upgrade failed\n");
 		return -EINTR;
+	}
 
 	/* Re-verify VMA after acquiring write lock */
 	vma = vma_lookup(mm, addr);
 	if (vma && vma_shares_pagetable(vma)) {
 		ret = shpt_unshare_vma(vma);
 		if (ret) {
+			shpt_mm_err(mm, "shpt_unshare_remote_vma: shpt_unshare_vma failed ret %d\n", ret);
 			mmap_write_unlock(mm);
 			return ret;
 		}
+		shpt_mm_info(mm, "shpt_unshare_remote_vma: addr 0x%lx unshared successfully\n", addr);
+	} else {
+		shpt_mm_info(mm, "shpt_unshare_remote_vma: addr 0x%lx already unshared or gone\n", addr);
 	}
 
 	mmap_write_downgrade(mm);
