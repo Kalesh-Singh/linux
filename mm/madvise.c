@@ -1299,15 +1299,8 @@ static bool can_madvise_modify(struct madvise_behavior *madv_behavior)
 	struct vm_area_struct *vma = madv_behavior->vma;
 
 	/* If the VMA isn't sealed we're good. */
-	if (!vma_is_sealed(vma)) {
-#ifdef CONFIG_SHARED_PAGETABLE
-		if (unlikely(vma_shares_pagetable(vma)) && is_discard(madv_behavior->behavior)) {
-			if (shpt_unshare_vma(vma))
-				return false;
-		}
-#endif
+	if (!vma_is_sealed(vma))
 		return true;
-	}
 
 	/* For a sealed VMA, we only care about discard operations. */
 	if (!is_discard(madv_behavior->behavior))
@@ -2028,9 +2021,23 @@ int do_madvise(struct mm_struct *mm, unsigned long start, size_t len_in, int beh
 
 	if (madvise_should_skip(start, len_in, behavior, &error))
 		return error;
+
+#ifdef CONFIG_SHARED_PAGETABLE
+	/*
+	 * Pre-flight unsharing: Ensure all VMAs in the range are privatized
+	 * before performing discard operations. This is done before
+	 * madvise_lock() to ensure we can safely acquire the write lock
+	 * if needed, and without holding any other locks.
+	 */
+	error = shpt_unshare_madvise_range(mm, start, len_in, behavior);
+	if (unlikely(error < 0))
+		return error;
+#endif
+
 	error = madvise_lock(&madv_behavior);
 	if (error)
 		return error;
+
 	madvise_init_tlb(&madv_behavior);
 	error = madvise_do_behavior(start, len_in, &madv_behavior);
 	madvise_finish_tlb(&madv_behavior);
@@ -2069,10 +2076,33 @@ static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 		size_t len_in = iter_iov_len(iter);
 		int error;
 
-		if (madvise_should_skip(start, len_in, behavior, &error))
+		if (madvise_should_skip(start, len_in, behavior, &error)) {
 			ret = error;
-		else
-			ret = madvise_do_behavior(start, len_in, &madv_behavior);
+			goto next_iov;
+		}
+
+#ifdef CONFIG_SHARED_PAGETABLE
+		/*
+		 * Pre-flight unsharing: Ensure all VMAs in the range are privatized
+		 * before performing discard operations. This must be done without
+		 * holding the madvise_lock.
+		 */
+		madvise_finish_tlb(&madv_behavior);
+		madvise_unlock(&madv_behavior);
+		error = shpt_unshare_madvise_range(mm, start, len_in, behavior);
+		if (unlikely(error < 0)) {
+			ret = error;
+			goto out;
+		}
+		error = madvise_lock(&madv_behavior);
+		if (error) {
+			ret = error;
+			goto out;
+		}
+		madvise_init_tlb(&madv_behavior);
+#endif
+
+		ret = madvise_do_behavior(start, len_in, &madv_behavior);
 		/*
 		 * An madvise operation is attempting to restart the syscall,
 		 * but we cannot proceed as it would not be correct to repeat
@@ -2100,6 +2130,7 @@ static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 		}
 		if (ret < 0)
 			break;
+next_iov:
 		iov_iter_advance(iter, iter_iov_len(iter));
 	}
 	madvise_finish_tlb(&madv_behavior);

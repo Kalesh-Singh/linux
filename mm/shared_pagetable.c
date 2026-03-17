@@ -409,6 +409,95 @@ int shpt_unshare_remote_vma(struct mm_struct *mm, unsigned long addr, bool write
 	return 1;
 }
 
+/*
+ * shpt_unshare_madvise_range - Unshare all shared VMAs in an madvise range.
+ * @mm: Target process MM.
+ * @start: Start address.
+ * @len: Length of the range.
+ * @behavior: madvise behavior.
+ *
+ * This function is used by do_madvise() to ensure all VMAs in a range are
+ * privatized before performing discard operations (like MADV_DONTNEED).
+ *
+ * It must be called while holding the mmap_lock. If unsharing is required,
+ * it will upgrade to a write lock, perform unsharing, and return with
+ * the lock state restored (but caller should retry the VMA walk).
+ *
+ * Returns:
+ *  0: No unsharing needed or successful.
+ *  1: Unsharing performed, lock state transitioned (caller should retry).
+ * -errno: Error.
+ */
+int shpt_unshare_madvise_range(struct mm_struct *mm, unsigned long start,
+			      unsigned long len, int behavior)
+{
+	struct vm_area_struct *vma;
+	unsigned long end = start + len;
+	unsigned long addr;
+	bool needed = false;
+
+	/* Only discard-like operations require unsharing */
+	switch (behavior) {
+	case MADV_DONTNEED:
+	case MADV_DONTNEED_LOCKED:
+	case MADV_REMOVE:
+	case MADV_FREE:
+	case MADV_DONTFORK:
+	case MADV_WIPEONFORK:
+		break;
+	default:
+		return 0;
+	}
+
+	mmap_read_lock(mm);
+	/* Pre-flight check under read lock */
+	for (addr = start; addr < end; ) {
+		vma = find_vma(mm, addr);
+		if (!vma || vma->vm_start >= end)
+			break;
+
+		if (vma_shares_pagetable(vma)) {
+			needed = true;
+			break;
+		}
+		addr = vma->vm_end;
+	}
+
+	if (!needed) {
+		mmap_read_unlock(mm);
+		return 0;
+	}
+
+	shpt_mm_info(mm, "shpt_unshare_madvise_range: addr 0x%lx len 0x%lx intent to unshare\n", start, len);
+
+	/* 
+	 * Transition to write lock. We drop the read lock and acquire
+	 * the write lock directly as requested.
+	 */
+	mmap_read_unlock(mm);
+	if (mmap_write_lock_killable(mm))
+		return -EINTR;
+
+	/* Perform unsharing on all matching VMAs in the range */
+	for (addr = start; addr < end; ) {
+		vma = find_vma(mm, addr);
+		if (!vma || vma->vm_start >= end)
+			break;
+
+		if (vma_shares_pagetable(vma)) {
+			int ret = shpt_unshare_vma(vma);
+			if (ret) {
+				mmap_write_unlock(mm);
+				return ret;
+			}
+		}
+		addr = vma->vm_end;
+	}
+
+	mmap_write_unlock(mm);
+	return 1;
+}
+
 #ifdef CONFIG_X86
 static void shpt_flush_tlb_ipi(void *data)
 {
