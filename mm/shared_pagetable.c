@@ -660,11 +660,13 @@ vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 
 	ret = handle_pte_fault(&ptshare_vmf);
 
-	if (ret & VM_FAULT_RETRY) {
+	if (ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED)) {
 		/*
 		 * handle_pte_fault has dropped the ptshare_mm lock.
 		 * Now we must drop the faulting process's lock.
 		 */
+		shpt_mm_info(vmf->vma->vm_mm, "shpt_handle_fault: handle_pte_fault returned %s (0x%x), releasing caller lock\n",
+			     (ret & VM_FAULT_RETRY ? "RETRY" : "COMPLETED"), ret);
 		release_fault_lock(vmf);
 	} else {
 		if (!(ret & VM_FAULT_ERROR) && !pmd_none(*ptshare_vmf.pmd)) {
@@ -694,6 +696,7 @@ vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 			mmap_read_unlock(ptshare_mm);
 	}
 
+	shpt_mm_info(vmf->vma->vm_mm, "shpt_handle_fault: returning 0x%x\n", ret);
 	return ret;
 
 out:
