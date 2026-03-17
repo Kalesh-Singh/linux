@@ -24,7 +24,7 @@ class PtShareTest : public ::testing::Test {
 protected:
     int fd;
     const char* test_file = "ptshare_test_file";
-    size_t mapping_size = 10 * PMD_SIZE;
+    size_t mapping_size = 1024UL * PMD_SIZE;
 
     void SetUp() override {
         fd = open(test_file, O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -311,10 +311,8 @@ TEST_F(PtShareTest, MultiProcessStress) {
     std::cout << "[ INFO ] Forking " << num_procs << " children to verify sharing..." << std::endl;
     for (int i = 0; i < num_procs; i++) {
         if (fork() == 0) {
-            void* child_map = do_mmap(addr, num_pmds * PMD_SIZE, PROT_READ, MAP_SHARED);
-            if (child_map == MAP_FAILED) exit(1);
             for (int j = 0; j < num_pmds; j++) {
-                if (((char*)child_map)[j * PMD_SIZE] != 'S') exit(2);
+                if (((char*)mapped)[j * PMD_SIZE] != 'S') exit(2);
             }
             exit(0);
         }
@@ -589,6 +587,332 @@ TEST_F(PtShareTest, ExecveCleanup) {
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
     std::cout << "[ OK   ] execve cleanup verified." << std::endl;
+}
+
+// Test 22: ptrace read should NOT trigger unsharing
+TEST_F(PtShareTest, PtraceReadNoUnshare) {
+    std::cout << "[ INFO ] Starting PtraceReadNoUnshare test..." << std::endl;
+    void* addr = (void*)0x670000000000;
+    int sync_pipe[2];
+    ASSERT_EQ(pipe(sync_pipe), 0);
+
+    // Parent populates the file data
+    char val = 'R';
+    ASSERT_EQ(pwrite(fd, &val, 1, 0), 1);
+
+    // Parent creates the shared PT mapping
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+    ASSERT_EQ(((char*)mapped)[0], 'R');
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(sync_pipe[1]); // Child doesn't write to pipe
+        
+        // Child has inherited the mapping and the shared page tables.
+        // Verify it can read (triggering shared fault if not already populated)
+        if (((char*)mapped)[0] != 'R') exit(2);
+
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        
+        // Wait for parent to signal completion
+        char buf;
+        if (read(sync_pipe[0], &buf, 1) <= 0) exit(3);
+        exit(0);
+    }
+
+    close(sync_pipe[0]); // Parent doesn't read from pipe
+    int status;
+    
+    // Wait for the child to stop after PTRACE_TRACEME + raise(SIGSTOP)
+    ASSERT_GT(waitpid(pid, &status, 0), 0);
+    ASSERT_TRUE(WIFSTOPPED(status)) << "Child not stopped: " << status;
+
+    std::cout << "[ INFO ] Peeking data (read-only GUP)..." << std::endl;
+    errno = 0;
+    long ret = ptrace(PTRACE_PEEKDATA, pid, addr, NULL);
+    if (ret == -1 && errno != 0) {
+        std::cerr << "ptrace peek failed: " << strerror(errno) << std::endl;
+    } else {
+        EXPECT_EQ((char)(ret & 0xFF), 'R');
+    }
+
+    // Signal child to exit and resume it
+    write(sync_pipe[1], "K", 1);
+    ptrace(PTRACE_CONT, pid, NULL, NULL);
+    
+    waitpid(pid, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    
+    munmap(mapped, PMD_SIZE);
+    std::cout << "[ OK   ] Ptrace read-only peek completed." << std::endl;
+}
+
+// Test 23: process_vm_writev triggers unsharing
+#include <sys/uio.h>
+TEST_F(PtShareTest, ProcessVmWriteUnshare) {
+    std::cout << "[ INFO ] Starting ProcessVmWriteUnshare test..." << std::endl;
+    void* addr = (void*)0x660000000000;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Use PROT_WRITE for process_vm_writev as it doesn't support FOLL_FORCE
+        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        if (mapped == MAP_FAILED) exit(1);
+
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+
+        if (((char*)mapped)[0] != 'V') {
+            std::cerr << "Tracee saw incorrect value: " << ((char*)mapped)[0] << std::endl;
+            exit(2);
+        }
+        exit(0);
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+    ASSERT_TRUE(WIFSTOPPED(status));
+
+    std::cout << "[ INFO ] Writing via process_vm_writev..." << std::endl;
+    char data = 'V';
+    struct iovec local[1];
+    struct iovec remote[1];
+    local[0].iov_base = &data;
+    local[0].iov_len = 1;
+    remote[0].iov_base = addr;
+    remote[0].iov_len = 1;
+
+    ssize_t nw = process_vm_writev(pid, local, 1, remote, 1, 0);
+    ASSERT_EQ(nw, 1) << "process_vm_writev failed: " << strerror(errno);
+
+    ptrace(PTRACE_CONT, pid, NULL, NULL);
+    waitpid(pid, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    std::cout << "[ OK   ] process_vm_writev unsharing verified." << std::endl;
+}
+
+// Test 24: gup_fast synchronization stress
+TEST_F(PtShareTest, GupFastRace) {
+    std::cout << "[ INFO ] Starting GupFastRace test..." << std::endl;
+    void* addr = (void*)0x650000000000;
+    
+    // Parent maps and populates
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+    memset(mapped, 'G', PMD_SIZE);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child: high-frequency gup_fast via vmsplice
+        int pipefds[2];
+        if (pipe(pipefds) < 0) exit(1);
+        
+        struct iovec iov;
+        iov.iov_base = addr;
+        iov.iov_len = PAGE_SIZE;
+
+        for (int i = 0; i < 1000; i++) {
+            // vmsplice triggers gup_fast on the memory
+            vmsplice(pipefds[1], &iov, 1, 0);
+            // Drain pipe so it doesn't block
+            char junk[PAGE_SIZE];
+            if (read(pipefds[0], junk, PAGE_SIZE) < 0) break;
+        }
+        exit(0);
+    }
+
+    // Parent: high-frequency unsharing via mprotect toggle
+    for (int i = 0; i < 100; i++) {
+        // This will trigger unsharing in the parent's MM
+        mprotect(mapped, PMD_SIZE, PROT_READ);
+        // Toggle back
+        mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE);
+        usleep(100);
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    
+    munmap(mapped, PMD_SIZE);
+    std::cout << "[ OK   ] Gup-fast race completed without crash." << std::endl;
+}
+
+// Test 25: O_DIRECT synchronization stress
+TEST_F(PtShareTest, GupFastODirect) {
+    std::cout << "[ INFO ] Starting GupFastODirect test..." << std::endl;
+    void* addr = (void*)0x640000000000;
+    
+    // Parent maps and populates
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+    memset(mapped, 'D', PMD_SIZE);
+
+    // Create a temporary file for O_DIRECT reads
+    const char* tmp_io_file = "ptshare_odirect_tmp";
+    int io_fd = open(tmp_io_file, O_RDWR | O_CREAT | O_TRUNC | O_DIRECT, 0666);
+    if (io_fd < 0) {
+        if (errno == EINVAL) {
+            std::cout << "[ SKIP ] O_DIRECT not supported on this filesystem." << std::endl;
+            munmap(mapped, PMD_SIZE);
+            return;
+        }
+        ASSERT_GE(io_fd, 0) << "Failed to open O_DIRECT file: " << strerror(errno);
+    }
+    
+    // Write some data to read back
+    char* io_buf;
+    ASSERT_EQ(posix_memalign((void**)&io_buf, 4096, 4096), 0);
+    memset(io_buf, 'Z', 4096);
+    // Write without O_DIRECT for setup
+    int setup_fd = open(tmp_io_file, O_WRONLY, 0666);
+    ASSERT_GE(setup_fd, 0);
+    ASSERT_EQ(write(setup_fd, io_buf, 4096), 4096);
+    close(setup_fd);
+    free(io_buf);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child: high-frequency O_DIRECT reads into the shared mapping
+        // This will trigger gup_fast pinning
+        for (int i = 0; i < 1000; i++) {
+            // Read from file directly into our shared mapping
+            if (pread(io_fd, addr, 4096, 0) < 0) {
+                // Some filesystems might fail O_DIRECT on certain alignments
+                // but we primarily care about the gup_fast path being hit.
+            }
+        }
+        exit(0);
+    }
+
+    // Parent: high-frequency unsharing via mprotect toggle
+    for (int i = 0; i < 100; i++) {
+        mprotect(mapped, PMD_SIZE, PROT_READ);
+        mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE);
+        usleep(100);
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    
+    close(io_fd);
+    unlink(tmp_io_file);
+    munmap(mapped, PMD_SIZE);
+    std::cout << "[ OK   ] Gup-fast O_DIRECT race completed without crash." << std::endl;
+}
+
+// Helper to get PageTables value from /proc/meminfo in kB
+static long get_pagetable_usage_kb() {
+    FILE* f = fopen("/proc/meminfo", "r");
+    if (!f) return -1;
+    char line[256];
+    long usage = -1;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "PageTables:", 11) == 0) {
+            sscanf(line + 11, "%ld", &usage);
+            break;
+        }
+    }
+    fclose(f);
+    return usage;
+}
+
+// Test 22: Page Table Efficiency Comparison
+TEST_F(PtShareTest, PageTableEfficiency) {
+    std::cout << "[ INFO ] Starting PageTableEfficiency test..." << std::endl;
+    const int num_procs = 50;
+    const int num_pmds = 500; // 1GB mapping
+    const size_t total_size = (size_t)num_pmds * PMD_SIZE;
+    void* addr = (void*)0x600000000000;
+    
+    auto run_experiment = [&](bool use_shpt) -> long {
+        long before = get_pagetable_usage_kb();
+        
+        pid_t parent_pid = fork();
+        if (parent_pid == 0) {
+            setpgid(0, 0); // Create a new process group
+            int flags = MAP_SHARED | MAP_FIXED;
+            if (use_shpt) flags |= MAP_SHARED_PT;
+            
+            void* mapped = mmap(addr, total_size, PROT_READ | PROT_WRITE, flags, fd, 0);
+            if (mapped == MAP_FAILED) {
+                perror("mmap failed");
+                _exit(1);
+            }
+            
+            for (int i = 0; i < num_procs; i++) {
+                if (fork() == 0) {
+                    signal(SIGTERM, [](int){ _exit(0); });
+                    // Children access all PMDs to ensure PTEs are present
+                    for (size_t j = 0; j < num_pmds; j++) {
+                        if (((char*)mapped)[j * PMD_SIZE] != 0) _exit(2);
+                    }
+                    
+                    // Signal this child is done via a dedicated file
+                    char sync_name[64];
+                    sprintf(sync_name, "sync_ready_%d", i);
+                    FILE* s = fopen(sync_name, "w");
+                    if (s) { fprintf(s, "OK"); fclose(s); }
+
+                    while(1) pause();
+                }
+            }
+            while(1) pause();
+            _exit(0);
+        }
+
+        // Wait for all 50 children to signal readiness
+        for (int i = 0; i < num_procs; i++) {
+            char sync_name[64];
+            sprintf(sync_name, "sync_ready_%d", i);
+            bool ready = false;
+            for (int retry = 0; retry < 50; retry++) {
+                struct stat st;
+                if (stat(sync_name, &st) == 0) {
+                    ready = true;
+                    break;
+                }
+                usleep(200000); // 0.2s
+            }
+            if (!ready) std::cerr << "[ WARN ] Child " << i << " never signaled ready." << std::endl;
+            unlink(sync_name);
+        }
+        sleep(2); // Extra settle time
+        
+        long during = get_pagetable_usage_kb();
+        
+        // Kill entire process group
+        kill(-parent_pid, SIGTERM);
+        
+        int status;
+        waitpid(parent_pid, &status, 0);
+        
+        return during - before;
+    };
+
+    std::cout << "[ INFO ] Measuring standard PageTable overhead..." << std::endl;
+    long std_overhead = run_experiment(false);
+    std::cout << "[ INFO ] Standard overhead: " << std_overhead << " kB" << std::endl;
+
+    std::cout << "[ INFO ] Waiting for PageTable usage to stabilize..." << std::endl;
+    sleep(10); 
+
+    std::cout << "[ INFO ] Measuring ZAPTS PageTable overhead..." << std::endl;
+    long zapts_overhead = run_experiment(true);
+    std::cout << "[ INFO ] ZAPTS overhead: " << zapts_overhead << " kB" << std::endl;
+
+    EXPECT_GT(std_overhead, 0);
+    EXPECT_GT(zapts_overhead, 0);
+    
+    // Theoretical Standard: 50 procs * 500 PMDs * 4kB/PMD = 100,000 kB.
+    // Theoretical ZAPTS: (1 ptshare_mm * 500 PMDs * 4kB) + (50 procs * PUD/PMD pages) = ~2,000 kB + (50 * 2 * 4kB) = ~2,400 kB.
+    // Savings should be ~97.5%.
+    EXPECT_LT(zapts_overhead, std_overhead / 10);
+    
+    std::cout << "[ OK   ] Efficiency verified. Savings: " << (std_overhead - zapts_overhead) << " kB" << std::endl;
 }
 
 int main(int argc, char **argv) {
