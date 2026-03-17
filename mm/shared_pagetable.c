@@ -243,9 +243,10 @@ int shpt_unshare_vma(struct vm_area_struct *vma)
 	struct mm_struct *mm = vma->vm_mm;
 	unsigned long addr;
 	int unshared_pmds = 0;
+	vm_flags_t old_flags = vma->vm_flags;
 
-	shpt_mm_info(mm, "shpt_unshare_vma: addr 0x%lx len 0x%lx\n",
-		     vma->vm_start, vma->vm_end - vma->vm_start);
+	shpt_mm_info(mm, "shpt_unshare_vma: addr 0x%lx len 0x%lx flags 0x%lx\n",
+		     vma->vm_start, vma->vm_end - vma->vm_start, old_flags);
 
 	if (!vma_shares_pagetable(vma))
 		return 0;
@@ -345,8 +346,8 @@ int shpt_unshare_vma(struct vm_area_struct *vma)
 	 */
 	vm_flags_clear(vma, VM_SHARED_PT);
 
-	shpt_mm_info(mm, "shpt_unshare_vma: unshared %d PMDs, addr 0x%lx len 0x%lx\n",
-		     unshared_pmds, vma->vm_start, vma->vm_end - vma->vm_start);
+	shpt_mm_info(mm, "shpt_unshare_vma: unshared %d PMDs, addr 0x%lx len 0x%lx, new flags 0x%lx\n",
+		     unshared_pmds, vma->vm_start, vma->vm_end - vma->vm_start, vma->vm_flags);
 
 	/* Drop our reference to the ptshare_mm shadow VMA */
 	shpt_vma_put(vma);
@@ -484,7 +485,7 @@ vm_fault_t shpt_handle_fault(struct vm_fault *vmf)
 	spinlock_t *ptl;
 	struct ptdesc *ptdesc;
 
-	shpt_mm_info(vmf->vma->vm_mm, "shpt_handle_fault: addr 0x%lx flags 0x%x\n", vmf->address, vmf->flags);
+	shpt_mm_info(vmf->vma->vm_mm, "shpt_handle_fault: addr 0x%lx flags 0x%x vma_flags 0x%lx\n", vmf->address, vmf->flags, vmf->vma->vm_flags);
 
 	ptshare_vma = lock_vma_under_rcu(ptshare_mm, vmf->address);
 	if (!ptshare_vma) {

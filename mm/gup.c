@@ -1199,11 +1199,15 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 	int foreign = (gup_flags & FOLL_REMOTE);
 	bool vma_anon = vma_is_anonymous(vma);
 
-	if (vm_flags & (VM_IO | VM_PFNMAP))
+	if (vm_flags & (VM_IO | VM_PFNMAP)) {
+		shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx has VM_IO|VM_PFNMAP (flags 0x%lx)\n", vma->vm_start, vm_flags);
 		return -EFAULT;
+	}
 
-	if ((gup_flags & FOLL_ANON) && !vma_anon)
+	if ((gup_flags & FOLL_ANON) && !vma_anon) {
+		shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx not anonymous\n", vma->vm_start);
 		return -EFAULT;
+	}
 
 	if ((gup_flags & FOLL_LONGTERM) && vma_is_fsdax(vma))
 		return -EOPNOTSUPP;
@@ -1211,8 +1215,10 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 	if ((gup_flags & FOLL_SPLIT_PMD) && is_vm_hugetlb_page(vma))
 		return -EOPNOTSUPP;
 
-	if (vma_is_secretmem(vma))
+	if (vma_is_secretmem(vma)) {
+		shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx secretmem\n", vma->vm_start);
 		return -EFAULT;
+	}
 
 #ifdef CONFIG_SHARED_PAGETABLE
 	if (write && unlikely(vma_shares_pagetable(vma)))
@@ -1221,12 +1227,16 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 
 	if (write) {
 		if (!vma_anon &&
-		    !writable_file_mapping_allowed(vma, gup_flags))
+		    !writable_file_mapping_allowed(vma, gup_flags)) {
+			shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx writeable_file_mapping not allowed (flags 0x%lx)\n", vma->vm_start, vm_flags);
 			return -EFAULT;
+		}
 
 		if (!(vm_flags & VM_WRITE) || (vm_flags & VM_SHADOW_STACK)) {
-			if (!(gup_flags & FOLL_FORCE))
+			if (!(gup_flags & FOLL_FORCE)) {
+				shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx write fail (no VM_WRITE and no FOLL_FORCE, flags 0x%lx)\n", vma->vm_start, vm_flags);
 				return -EFAULT;
+			}
 			/*
 			 * We used to let the write,force case do COW in a
 			 * VM_MAYWRITE VM_SHARED !VM_WRITE vma, so ptrace could
@@ -1236,25 +1246,33 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 			 * Anon pages in shared mappings are surprising: now
 			 * just reject it.
 			 */
-			if (!is_cow_mapping(vm_flags))
+			if (!is_cow_mapping(vm_flags)) {
+				shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx write fail (!is_cow_mapping, flags 0x%lx)\n", vma->vm_start, vm_flags);
 				return -EFAULT;
+			}
 		}
 	} else if (!(vm_flags & VM_READ)) {
-		if (!(gup_flags & FOLL_FORCE))
+		if (!(gup_flags & FOLL_FORCE)) {
+			shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx read fail (no VM_READ and no FOLL_FORCE, flags 0x%lx)\n", vma->vm_start, vm_flags);
 			return -EFAULT;
+		}
 		/*
 		 * Is there actually any vma we can reach here which does not
 		 * have VM_MAYREAD set?
 		 */
-		if (!(vm_flags & VM_MAYREAD))
+		if (!(vm_flags & VM_MAYREAD)) {
+			shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx read fail (no VM_MAYREAD, flags 0x%lx)\n", vma->vm_start, vm_flags);
 			return -EFAULT;
+		}
 	}
 	/*
 	 * gups are always data accesses, not instruction
 	 * fetches, so execute=false here
 	 */
-	if (!arch_vma_access_permitted(vma, write, false, foreign))
+	if (!arch_vma_access_permitted(vma, write, false, foreign)) {
+		shpt_mm_info(vma->vm_mm, "check_vma_flags: addr 0x%lx arch_vma_access_permitted failed\n", vma->vm_start);
 		return -EFAULT;
+	}
 	return 0;
 }
 

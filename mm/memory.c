@@ -6619,7 +6619,7 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	/* If the fault handler drops the mmap_lock, vma may be freed */
 	struct mm_struct *mm = vma->vm_mm;
 
-	shpt_mm_info(mm, "handle_mm_fault: addr 0x%lx flags 0x%x\n", address, flags);
+	shpt_mm_info(mm, "handle_mm_fault: addr 0x%lx flags 0x%x vma_flags 0x%lx\n", address, flags, vma->vm_flags);
 	vm_fault_t ret;
 	bool is_droppable;
 
