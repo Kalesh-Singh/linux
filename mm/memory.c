@@ -6981,6 +6981,28 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 	if (mmap_read_lock_killable(mm))
 		return 0;
 
+	/*
+	 * SHPT Pre-flight: If we are writing to a shared page table mapping,
+	 * we MUST unshare it while holding the write lock BEFORE GUP.
+	 */
+#ifdef CONFIG_SHARED_PAGETABLE
+	if (write) {
+		struct vm_area_struct *vma = vma_lookup(mm, addr);
+		if (vma && vma_shares_pagetable(vma)) {
+			mmap_read_unlock(mm);
+			if (mmap_write_lock_killable(mm))
+				return 0;
+
+			/* Re-verify VMA after acquiring write lock */
+			vma = vma_lookup(mm, addr);
+			if (vma && vma_shares_pagetable(vma))
+				shpt_unshare_vma(vma);
+
+			mmap_write_downgrade(mm);
+		}
+	}
+#endif
+
 	/* Untag the address before looking up the VMA */
 	addr = untagged_addr_remote(mm, addr);
 
@@ -6996,6 +7018,21 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 		struct vm_area_struct *vma = NULL;
 		struct page *page = get_user_page_vma_remote(mm, addr,
 							     gup_flags, &vma);
+
+#ifdef CONFIG_SHARED_PAGETABLE
+		if (PTR_ERR(page) == -EMLINK) {
+			mmap_read_unlock(mm);
+			if (mmap_write_lock_killable(mm))
+				return buf - old_buf;
+
+			vma = vma_lookup(mm, addr);
+			if (vma && vma_shares_pagetable(vma))
+				shpt_unshare_vma(vma);
+
+			mmap_write_downgrade(mm);
+			continue;
+		}
+#endif
 
 		if (IS_ERR(page)) {
 			/* We might need to expand the stack to access it */

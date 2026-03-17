@@ -1397,16 +1397,8 @@ static long __get_user_pages(struct mm_struct *mm,
 				ret = check_vma_flags(vma, gup_flags);
 				if (ret) {
 #ifdef CONFIG_SHARED_PAGETABLE
-					if (ret == -EMLINK) {
-						shpt_mm_info(mm, "__get_user_pages (madvise): unsharing addr 0x%lx len 0x%lx\n",
-							     vma->vm_start, vma->vm_end - vma->vm_start);
-						ret = shpt_unshare_vma(vma);
-						if (ret) {
-							shpt_mm_err(mm, "__get_user_pages (madvise): unshare failed ret %li\n", ret);
-							goto out;
-						}
-						goto retry;
-					}
+					if (ret == -EMLINK)
+						goto out;
 #endif
 					ret = -EINVAL;
 					goto out;
@@ -1431,16 +1423,8 @@ static long __get_user_pages(struct mm_struct *mm,
 			ret = check_vma_flags(vma, gup_flags);
 			if (ret) {
 #ifdef CONFIG_SHARED_PAGETABLE
-				if (ret == -EMLINK) {
-					shpt_mm_info(mm, "__get_user_pages: unsharing addr 0x%lx len 0x%lx\n",
-						     vma->vm_start, vma->vm_end - vma->vm_start);
-					ret = shpt_unshare_vma(vma);
-					if (ret) {
-						shpt_mm_err(mm, "__get_user_pages: unshare failed ret %li\n", ret);
-						goto out;
-					}
-					goto retry;
-				}
+				if (ret == -EMLINK)
+					goto out;
 #endif
 				goto out;
 			}

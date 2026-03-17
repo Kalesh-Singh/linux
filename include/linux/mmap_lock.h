@@ -650,4 +650,19 @@ static inline int mmap_lock_is_contended(struct mm_struct *mm)
 	return rwsem_is_contended(&mm->mmap_lock);
 }
 
+#ifdef CONFIG_LOCK_MM_AND_FIND_VMA
+bool mmap_upgrade_trylock(struct mm_struct *mm);
+bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs);
+#else
+static inline bool mmap_upgrade_trylock(struct mm_struct *mm)
+{
+	return false;
+}
+
+static inline bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
+{
+	return false;
+}
+#endif
+
 #endif /* _LINUX_MMAP_LOCK_H */

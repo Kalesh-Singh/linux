@@ -12,6 +12,7 @@
 #include <linux/smp.h>
 #include <linux/trace_events.h>
 #include <linux/local_lock.h>
+#include <linux/extable.h>
 
 EXPORT_TRACEPOINT_SYMBOL(mmap_lock_start_locking);
 EXPORT_TRACEPOINT_SYMBOL(mmap_lock_acquire_returned);
@@ -443,6 +444,7 @@ static inline bool get_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs 
 
 	if (regs && !user_mode(regs)) {
 		unsigned long ip = exception_ip(regs);
+
 		if (!search_exception_tables(ip))
 			return false;
 	}
@@ -450,7 +452,7 @@ static inline bool get_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs 
 	return !mmap_read_lock_killable(mm);
 }
 
-static inline bool mmap_upgrade_trylock(struct mm_struct *mm)
+bool mmap_upgrade_trylock(struct mm_struct *mm)
 {
 	/*
 	 * We don't have this operation yet.
@@ -463,11 +465,12 @@ static inline bool mmap_upgrade_trylock(struct mm_struct *mm)
 	return false;
 }
 
-static inline bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
+bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
 {
 	mmap_read_unlock(mm);
 	if (regs && !user_mode(regs)) {
 		unsigned long ip = exception_ip(regs);
+
 		if (!search_exception_tables(ip))
 			return false;
 	}
