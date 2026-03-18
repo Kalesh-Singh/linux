@@ -843,6 +843,9 @@ TEST_F(PtShareTest, PageTableEfficiency) {
                 _exit(1);
             }
             
+            // Force PTE-level page tables to ensure we are testing PTE sharing
+            madvise(mapped, total_size, MADV_NOHUGEPAGE);
+            
             for (int i = 0; i < num_procs; i++) {
                 if (fork() == 0) {
                     signal(SIGTERM, [](int){ _exit(0); });
