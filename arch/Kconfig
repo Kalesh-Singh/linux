@@ -1778,6 +1778,12 @@ config ARCH_HAS_KERNEL_FPU_SUPPORT
 	  Architectures that select this option can run floating-point code in
 	  the kernel, as described in Documentation/core-api/floating-point.rst.
 
+config ARCH_HAS_PTSHARE
+	bool
+	help
+	  Architectures that select this are able to share page tables for
+	  non-CoWable file-backed mappings between a parent and child processes.
+
 config ARCH_VMLINUX_NEEDS_RELOCS
 	bool
 	help
