@@ -1380,6 +1380,7 @@ config PTSHARE
 	bool "Page table sharing support"
 	depends on MMU && PER_VMA_LOCK && SPLIT_PTE_PTLOCKS && MMU_NOTIFIER
 	depends on ARCH_HAS_PTSHARE
+	depends on !HUGETLBFS
 	help
 	  Allows sharing of page tables between processes via fork() for
 	  non-CoWable file-backed mappings. This can significantly reduce
