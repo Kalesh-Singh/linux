@@ -1215,6 +1215,9 @@ static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
 #ifdef CONFIG_64BIT
 		[ilog2(VM_SEALED)] = "sl",
 #endif
+#ifdef CONFIG_PTSHARE
+		[ilog2(VM_PT_SHARED)] = "sp",
+#endif
 	};
 	size_t i;
 
