@@ -567,7 +567,8 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	    ((vm_flags & VM_LOCKED) ||
 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
 		*populate = len;
-	return addr;
+
+	return ptshare_install_vma(mm, addr);
 }
 
 unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,

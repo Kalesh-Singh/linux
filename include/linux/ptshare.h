@@ -22,6 +22,8 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 			  unsigned long len, unsigned long prot,
 			  unsigned long flags, vm_flags_t vm_flags,
 			  unsigned long pgoff);
+
+unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr);
 #else /* !CONFIG_PTSHARE */
 static inline int ptshare_validate_mmap(struct file *file, unsigned long addr,
 					unsigned long len, unsigned long prot,
@@ -29,6 +31,12 @@ static inline int ptshare_validate_mmap(struct file *file, unsigned long addr,
 					unsigned long pgoff)
 {
 	return 0;
+}
+
+static inline unsigned long ptshare_install_vma(struct mm_struct *mm,
+						unsigned long addr)
+{
+	return addr;
 }
 #endif /* CONFIG_PTSHARE */
 #endif /* _LINUX_PTSHARE_H */
