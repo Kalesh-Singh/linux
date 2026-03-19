@@ -12,6 +12,8 @@
  */
 #include <linux/ptshare.h>
 
+#include <linux/file.h>
+#include <linux/mm_inline.h>
 #include <linux/mmap_lock.h>
 #include <linux/slab.h>
 #include <linux/sched/mm.h>
@@ -231,4 +233,159 @@ void ptshare_put_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
 		ptshare_remove_vma(vma, desc);
 
 	ptshare_put_desc(desc);
+}
+
+/*
+ * Sanitize the shadow VMA.
+ *
+ * Since we are cloning a guest VMA, we must ensure it is isolated
+ * from the guest's reverse mapping, locking structures, and
+ * process-specific metadata.
+ */
+static inline void ptshare_sanitize_vma(struct vm_area_struct *ptshare_vma)
+{
+	/*
+	 * Clear the shared page table flag, this will be used by
+	 * rmap walks to determine that ptshare_mm VMAs are candidate
+	 * for rmap lookups.
+	 */
+	vm_flags_clear(ptshare_vma, VM_PT_SHARED);
+
+	ptshare_vma->anon_vma = NULL;
+	INIT_LIST_HEAD(&ptshare_vma->anon_vma_chain);
+
+	/* Reset per-VMA lock state for the ptshare_mm context */
+	vma_lock_init(ptshare_vma, true);
+
+	/*
+	 * TODO: Delete below here once we have a better understanding
+	 * of what metadata needs to be sanitized for the shared VMAs.
+	 */
+#ifdef CONFIG_ANON_VMA_NAME
+	/* Sever name and NUMA policy links to the guest MM */
+	free_anon_vma_name(ptshare_vma);
+	ptshare_vma->anon_name = NULL;
+#endif
+
+#ifdef CONFIG_NUMA
+	ptshare_vma->vm_policy = NULL;
+#endif
+
+#ifdef CONFIG_NUMA_BALANCING
+	/* Reset NUMA balancing state */
+	vma_numab_state_free(ptshare_vma);
+	ptshare_vma->numab_state = NULL;
+#endif
+}
+
+static inline int __ptshare_install_vma(struct vm_area_struct *vma)
+{
+	unsigned long len = vma->vm_end - vma->vm_start;
+	unsigned long addr = vma->vm_start;
+	struct vm_area_struct *ptshare_vma;
+	struct ptshare_desc *desc = vma_ptshare_desc(vma);
+	struct mm_struct *ptshare_mm = desc->ptshare_mm;
+	int ret = 0;
+
+	mmap_assert_write_locked(vma->vm_mm);
+	mmap_write_lock(ptshare_mm);
+
+	/* Re-check for overlap while holding the write lock */
+	ptshare_vma = find_vma_intersection(ptshare_mm, addr, addr + len);
+	if (ptshare_vma) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	ptshare_vma = vm_area_dup(vma);
+	if (!ptshare_vma) {
+		ret = -ENOMEM;
+		goto unlock;
+	}
+
+	ptshare_vma->vm_mm = ptshare_mm;
+
+	ptshare_sanitize_vma(ptshare_vma);
+
+	/*
+	 * Increment the file reference count and notify any device-specific
+	 * VMA open hooks to ensure the shared VMA is properly tracked.
+	 */
+	if (ptshare_vma->vm_file)
+		get_file(ptshare_vma->vm_file);
+
+	if (ptshare_vma->vm_ops && ptshare_vma->vm_ops->open)
+		ptshare_vma->vm_ops->open(ptshare_vma);
+
+	refcount_set(vma_ptshare_refcount(ptshare_vma), 1);
+
+	ret = insert_vm_struct(ptshare_mm, ptshare_vma);
+	if (ret)
+		goto put_file;
+
+	vm_stat_account(ptshare_mm, ptshare_vma->vm_flags, vma_pages(ptshare_vma));
+	goto unlock;
+
+put_file:
+	if (ptshare_vma->vm_file)
+		fput(ptshare_vma->vm_file);
+
+	vm_area_free(ptshare_vma);
+unlock:
+	mmap_write_unlock(ptshare_mm);
+
+	return ret;
+}
+
+unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr)
+{
+	int install_err, unmap_err;
+	struct vm_area_struct *vma;
+	unsigned long len;
+
+	if (IS_ERR_VALUE(addr))
+		return addr;
+
+	vma = vma_lookup(mm, addr);
+
+	/* This was just installed and the write lock is still held*/
+	BUG_ON(!vma);
+	mmap_assert_write_locked(vma->vm_mm);
+
+	if (!vma_shares_pagetables(vma))
+		return addr;
+
+	/* Initialize VMA's descriptor pointer */
+	vma_set_ptshare_desc(vma, mm->ptshare_desc);
+
+	/* mm must refer to the private guest MM*/
+	BUG_ON(mm == vma_ptshare_desc(vma)->ptshare_mm);
+
+	install_err = __ptshare_install_vma(vma);
+	if (!install_err) {
+		ptshare_get_desc(vma_ptshare_desc(vma));
+		return addr;
+	}
+
+	len = vma->vm_end - vma->vm_start;
+	unmap_err = do_munmap(mm, addr, len, NULL);
+
+	if (!unmap_err)
+		return install_err;
+
+	/*
+	 * If installing the VMA into the shared manager fails, attempt to
+	 * unmap the guest VMA to clean up any partial state.
+	 *
+	 * If the unmap also fails, clear VM_PT_SHARED from the guest VMA
+	 * and return success to fail gracefully.
+	 *
+	 * This leaves the guest VMA in place without shared page tables,
+	 * which is a valid albeit non-shared configuration.
+	 *
+	 * The user can detect this by checking the vm_flags from smaps.
+	 */
+	vm_flags_clear(vma, VM_PT_SHARED);
+
+	return addr;
 }
