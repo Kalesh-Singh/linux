@@ -17,6 +17,8 @@
 #include <linux/sched/mm.h>
 #include <linux/xarray.h>
 
+#include "internal.h"
+
 struct mm_struct *ptshare_mm;
 
 /*
@@ -238,6 +240,150 @@ unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr)
 
 	return addr;
 }
+
+vm_fault_t ptshare_handle_mm_fault(struct vm_area_struct *ptshare_vma,
+				 struct vm_fault *vmf, unsigned int flags)
+{
+	struct vm_fault ptshare_vmf = *vmf;
+	vm_fault_t ret;
+	pgd_t *pgd;
+	p4d_t *p4d;
+	struct ptdesc *ptdesc;
+
+	vma_assert_locked(ptshare_vma);
+	assert_fault_locked(vmf);
+
+	ptshare_vmf.flags = flags;
+	pgd = pgd_offset(ptshare_mm, vmf->address);
+	p4d = p4d_alloc(ptshare_mm, pgd, vmf->address);
+	if (!p4d)
+		return VM_FAULT_OOM;
+
+	ptshare_vmf.pud = pud_alloc(ptshare_mm, p4d, vmf->address);
+	if (!ptshare_vmf.pud)
+		return VM_FAULT_OOM;
+
+	ptshare_vmf.pmd = pmd_alloc(ptshare_mm, ptshare_vmf.pud, vmf->address);
+	if (!ptshare_vmf.pmd)
+		return VM_FAULT_OOM;
+
+	ptshare_vmf.vma = ptshare_vma;
+	ptshare_vmf.prealloc_pte = NULL;
+	ptshare_vmf.real_address = vmf->real_address;
+
+	ret = handle_pte_fault(&ptshare_vmf);
+
+	/*
+	 * handle_pte_fault() has dropped the ptshare_mm lock.
+	 * The caller will handle dropping the faulting process's lock.
+	 */
+	if (ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED))
+		return ret;
+
+	if (!(ret & VM_FAULT_ERROR) && !pmd_none(*ptshare_vmf.pmd)) {
+		/*
+		 * PMD Splicing:
+		 * The ptshare_mm now has a populated PTE page table.
+		 * We "splice" this shared PTE page table directly into the
+		 * faulting process's PMD. We increment the ptdesc refcount
+		 * so the shared page table is not freed prematurely when a
+		 * single sharing process unmaps the region.
+		 *
+		 * The faulting process's PMD lock is already held by the caller.
+		 */
+		if (pmd_none(*vmf->pmd)) {
+			ptdesc = page_ptdesc(pmd_page(*ptshare_vmf.pmd));
+			ptdesc_get(ptdesc);
+			set_pmd_at(vmf->vma->vm_mm, vmf->address, vmf->pmd, *ptshare_vmf.pmd);
+			mm_inc_nr_ptes(vmf->vma->vm_mm);
+		}
+	}
+
+	return ret;
+}
+
+vm_fault_t ptshare_do_page_fault(struct vm_fault *vmf)
+{
+	unsigned int flags = vmf->flags	& ~FAULT_FLAG_VMA_LOCK;
+	struct vm_area_struct *ptshare_vma;
+	vm_fault_t ret;
+
+	/*
+	 * Phase 1: Optimistic Per-VMA Lock
+	 *
+	 * Attempt to acquire the VMA lock for the shared manager address space.
+	 * This is the fast path that avoids the global mmap_lock.
+	 */
+	ptshare_vma = lock_vma_under_rcu(ptshare_mm, vmf->address);
+	if (ptshare_vma) {
+		ret = ptshare_handle_mm_fault(ptshare_vma, vmf,
+					      flags | FAULT_FLAG_VMA_LOCK);
+
+		/*
+		 * If handle_pte_fault() returned RETRY or COMPLETED, it
+		 * already dropped the VMA lock.
+		 */
+		if (!(ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED)))
+			vma_end_read(ptshare_vma);
+
+		return ret;
+	}
+
+	/*
+	 * Phase 2: Fallback to mmap_lock
+	 *
+	 * Use the nested helper to safely look up and lock the shared VMA
+	 * while already holding the faulting process's lock.
+	 */
+	ptshare_vma = lock_mm_and_find_vma_nested(ptshare_mm, vmf->address,
+						  NULL, SINGLE_DEPTH_NESTING);
+	if (!ptshare_vma)
+		return VM_FAULT_SIGSEGV;
+
+	ret = ptshare_handle_mm_fault(ptshare_vma, vmf,
+				      flags & ~FAULT_FLAG_VMA_LOCK);
+
+	/*
+	 * If handle_pte_fault() returned RETRY, it already dropped the
+	 * mmap_lock.
+	 */
+	if (!(ret & VM_FAULT_RETRY))
+		mmap_read_unlock(ptshare_mm);
+
+	return ret;
+}
+
+/**
+ * ptshare_handle_fault - High-level entry point for shared page table faults.
+ * @vmf: The fault descriptor.
+ *
+ * This function intercepts faults in VMAs that share page tables. It manages
+ * the synchronization of the faulting process's PMD and coordinates the
+ * splicing of shared PTE tables from the global manager MM (ptshare_mm).
+ *
+ * Locking semantics:
+ * 1. Guest PMD Protection: The faulting process's PMD lock is acquired to
+ *    protect the private directory during directory population and atomic
+ *    PMD splicing. This ensures consistency against concurrent teardown or
+ *    modification of the guest's page tables.
+ * 2. Manager Lifecycle: Delegates to ptshare_do_page_fault() to manage the
+ *    locking lifecycle of the ptshare_mm (RCU or mmap_lock).
+ * 3. Atomic Splicing: The actual PMD copy is performed under the guest
+ *    PMD lock, ensuring that the transition from 'none' to 'populated shared'
+ *    is atomic for other threads.
+ *
+ * Return: A vm_fault_t result from the shared fault handler.
+ */
+vm_fault_t ptshare_handle_fault(struct vm_fault *vmf)
+{
+	spinlock_t *ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
+	vm_fault_t ret = ptshare_do_page_fault(vmf);
+
+	spin_unlock(ptl);
+
+	return ret;
+}
+
 
 static int __init ptshare_init(void)
 {
