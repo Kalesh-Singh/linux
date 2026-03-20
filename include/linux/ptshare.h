@@ -94,6 +94,8 @@ void ptshare_get_vma(struct vm_area_struct *vma, struct ptshare_desc *desc);
 void ptshare_put_vma(struct vm_area_struct *vma, struct ptshare_desc *desc);
 
 unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr);
+
+vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf);
 #else /* !CONFIG_PTSHARE */
 static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
 {
@@ -145,6 +147,11 @@ static inline unsigned long ptshare_install_vma(struct mm_struct *mm,
 						unsigned long addr)
 {
 	return addr;
+}
+
+static inline vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf)
+{
+	return VM_FAULT_SIGBUS;
 }
 #endif /* CONFIG_PTSHARE */
 
