@@ -18,6 +18,8 @@
 #include <linux/slab.h>
 #include <linux/sched/mm.h>
 
+#include "internal.h"
+
 static inline void mmap_lock_set_ptshare_class(struct mm_struct *mm)
 {
 	static struct lock_class_key ptshare_mmap_lock_key;
@@ -432,4 +434,119 @@ bool ptshare_free_pte_range(pgtable_t ptdesc)
 	}
 
 	return false;
+}
+
+vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf)
+{
+	struct ptshare_desc *desc = vma_ptshare_desc(vmf->vma);
+	struct mm_struct *ptshare_mm = desc->ptshare_mm;
+	unsigned int flags = vmf->flags	& ~FAULT_FLAG_VMA_LOCK;
+	struct vm_fault ptshare_vmf = *vmf;
+	struct vm_area_struct *ptshare_vma;
+	struct ptdesc *ptdesc;
+	vm_fault_t ret;
+	pgd_t *pgd;
+	p4d_t *p4d;
+
+	assert_fault_locked(vmf);
+
+	/*
+	 * Optimistic Per-VMA Lock
+	 *
+	 * Attempt to acquire the VMA lock for the shared manager address space.
+	 * This is the fast path that avoids the global mmap_lock.
+	 */
+	ptshare_vma = lock_vma_under_rcu(ptshare_mm, vmf->address);
+	if (!ptshare_vma) {
+		/*
+		 * Fallback to mmap_lock
+		 *
+		 * Use the nested helper to safely look up and lock the shared VMA
+		 * while already holding the faulting process's lock.
+		 */
+		ptshare_vma = lock_mm_and_find_vma(ptshare_mm, vmf->address,
+							NULL);
+		if (!ptshare_vma)
+			return VM_FAULT_SIGSEGV;
+	} else {
+		flags |= FAULT_FLAG_VMA_LOCK;
+	}
+
+	ptshare_vmf.flags = flags;
+	ptshare_vmf.vma = ptshare_vma;
+	ptshare_vmf.prealloc_pte = NULL;
+	ptshare_vmf.real_address = vmf->real_address;
+
+	assert_fault_locked(&ptshare_vmf);
+
+	pgd = pgd_offset(ptshare_mm, vmf->address);
+	p4d = p4d_alloc(ptshare_mm, pgd, vmf->address);
+	if (!p4d) {
+		ret = VM_FAULT_OOM;
+		goto out;
+	}
+
+	ptshare_vmf.pud = pud_alloc(ptshare_mm, p4d, vmf->address);
+	if (!ptshare_vmf.pud) {
+		ret = VM_FAULT_OOM;
+		goto out;
+	}
+
+	ptshare_vmf.pmd = pmd_alloc(ptshare_mm, ptshare_vmf.pud, vmf->address);
+	if (!ptshare_vmf.pmd) {
+		ret = VM_FAULT_OOM;
+		goto out;
+	}
+
+	ret = handle_pte_fault(&ptshare_vmf);
+
+	/*
+	 * PMD Splicing:
+	 * The ptshare_mm now has a populated PTE page table.
+	 * We "splice" this shared PTE page table directly into the
+	 * faulting process's PMD.
+	 *
+	 * Safety Analysis:
+	 * 1. Structural Integrity: It is safe to access vmf->pmd here because
+	 *    the caller (arch fault handler) holds the guest MM's read-side
+	 *    lock (either per-VMA or mmap_lock). Any operation that would
+	 *    free the PMD page (munmap, exit_mmap) requires the mmap_write_lock.
+	 *    Even if a writer acquires the mmap_write_lock, they are blocked
+	 *    from actually modifying or detaching this VMA (via vma_start_write)
+	 *    until all per-VMA readers have finished.
+	 * 2. Atomic Population: We acquire the guest's PMD spinlock only for
+	 *    the actual splice. This avoids holding the spinlock while
+	 *    performing potentially sleeping operations in the manager MM.
+	 * 3. Race Prevention: The double-check (pmd_none) inside the lock
+	 *    ensures that if multiple threads fault on the same PMD, only
+	 *    one performs the splicing and refcount increment.
+	 */
+	if (!(ret & (VM_FAULT_ERROR | VM_FAULT_RETRY)) && !pmd_none(*ptshare_vmf.pmd)) {
+		spinlock_t *ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
+
+		if (pmd_none(*vmf->pmd)) {
+			ptdesc = page_ptdesc(pmd_page(*ptshare_vmf.pmd));
+			ptdesc_get(ptdesc);
+			set_pmd_at(vmf->vma->vm_mm, vmf->address, vmf->pmd, *ptshare_vmf.pmd);
+			mm_inc_nr_ptes(vmf->vma->vm_mm);
+		}
+
+		spin_unlock(ptl);
+	}
+
+out:
+	/*
+	 * If handle_pte_fault() returned RETRY or COMPLETED, it already
+	 * dropped the manager lock; we must also drop the guest lock to
+	 * follow the fault handler contract.
+	 *
+	 * Otherwise, we release the manager lock we acquired and let the
+	 * caller release the guest lock.
+	 */
+	if (ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED))
+		release_fault_lock(vmf);
+	else
+		release_fault_lock(&ptshare_vmf);
+
+	return ret;
 }
