@@ -78,6 +78,7 @@
 #include <linux/sched/sysctl.h>
 #include <linux/pgalloc.h>
 #include <linux/uaccess.h>
+#include <linux/ptshare.h>
 
 #include <trace/events/kmem.h>
 
@@ -6270,7 +6271,7 @@ static void fix_spurious_fault(struct vm_fault *vmf,
  * The mmap_lock may have been released depending on flags and our return value.
  * See filemap_fault() and __folio_lock_or_retry().
  */
-static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
+vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
 
@@ -6407,6 +6408,9 @@ retry_pud:
 	vmf.pmd = pmd_alloc(mm, vmf.pud, address);
 	if (!vmf.pmd)
 		return VM_FAULT_OOM;
+
+	if (unlikely(vma_shares_pagetables(vma)))
+		return ptshare_handle_mm_fault(&vmf);
 
 	/* Huge pud page fault raced with pmd_alloc? */
 	if (pud_trans_unstable(vmf.pud))
