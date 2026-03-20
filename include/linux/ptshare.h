@@ -11,6 +11,24 @@ static inline bool vma_shares_pagetables(const struct vm_area_struct *vma)
 	return vma->vm_flags & VM_PT_SHARED;
 }
 
+/**
+ * ptdesc_get - Increment reference count on a page table descriptor
+ * @pt: The page table descriptor.
+ */
+static inline void ptdesc_get(struct ptdesc *pt)
+{
+	folio_get(ptdesc_folio(pt));
+}
+
+/**
+ * ptdesc_put - Decrement reference count on a page table descriptor
+ * @pt: The page table descriptor.
+ */
+static inline void ptdesc_put(struct ptdesc *pt)
+{
+	folio_put(ptdesc_folio(pt));
+}
+
 #ifdef CONFIG_PTSHARE
 int ptshare_validate_mmap(struct file *file, unsigned long addr,
 			  unsigned long len, unsigned long prot,
