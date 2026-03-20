@@ -436,9 +436,10 @@ fallback:
 #ifdef CONFIG_LOCK_MM_AND_FIND_VMA
 #include <linux/extable.h>
 
-static inline bool get_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
+static inline bool get_mmap_lock_carefully_nested(struct mm_struct *mm, struct pt_regs *regs,
+						int subclass)
 {
-	if (likely(mmap_read_trylock(mm)))
+	if (likely(mmap_read_trylock_nested(mm, subclass)))
 		return true;
 
 	if (regs && !user_mode(regs)) {
@@ -447,10 +448,15 @@ static inline bool get_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs 
 			return false;
 	}
 
-	return !mmap_read_lock_killable(mm);
+	return !mmap_read_lock_killable_nested(mm, subclass);
 }
 
-static inline bool mmap_upgrade_trylock(struct mm_struct *mm)
+static inline bool get_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
+{
+	return get_mmap_lock_carefully_nested(mm, regs, 0);
+}
+
+static inline bool mmap_upgrade_trylock_nested(struct mm_struct *mm, int subclass)
 {
 	/*
 	 * We don't have this operation yet.
@@ -463,7 +469,13 @@ static inline bool mmap_upgrade_trylock(struct mm_struct *mm)
 	return false;
 }
 
-static inline bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
+static inline bool mmap_upgrade_trylock(struct mm_struct *mm)
+{
+	return mmap_upgrade_trylock_nested(mm, 0);
+}
+
+static inline bool upgrade_mmap_lock_carefully_nested(struct mm_struct *mm, struct pt_regs *regs,
+							int subclass)
 {
 	mmap_read_unlock(mm);
 	if (regs && !user_mode(regs)) {
@@ -471,9 +483,13 @@ static inline bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_r
 		if (!search_exception_tables(ip))
 			return false;
 	}
-	return !mmap_write_lock_killable(mm);
+	return !mmap_write_lock_killable_nested(mm, subclass);
 }
 
+static inline bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
+{
+	return upgrade_mmap_lock_carefully_nested(mm, regs, 0);
+}
 /*
  * Helper for page fault handling.
  *
@@ -493,12 +509,13 @@ static inline bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_r
  * We can also actually take the mm lock for writing if we
  * need to extend the vma, which helps the VM layer a lot.
  */
-struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
-			unsigned long addr, struct pt_regs *regs)
+struct vm_area_struct *lock_mm_and_find_vma_nested(struct mm_struct *mm,
+			unsigned long addr, struct pt_regs *regs,
+			int subclass)
 {
 	struct vm_area_struct *vma;
 
-	if (!get_mmap_lock_carefully(mm, regs))
+	if (!get_mmap_lock_carefully_nested(mm, regs, subclass))
 		return NULL;
 
 	vma = find_vma(mm, addr);
@@ -523,8 +540,8 @@ struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
 	 * re-take it, and also look up the vma again,
 	 * re-checking it.
 	 */
-	if (!mmap_upgrade_trylock(mm)) {
-		if (!upgrade_mmap_lock_carefully(mm, regs))
+	if (!mmap_upgrade_trylock_nested(mm, subclass)) {
+		if (!upgrade_mmap_lock_carefully_nested(mm, regs, subclass))
 			return NULL;
 
 		vma = find_vma(mm, addr);
@@ -547,6 +564,12 @@ fail:
 	mmap_write_unlock(mm);
 	return NULL;
 }
+
+struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
+			unsigned long addr, struct pt_regs *regs)
+{
+	return lock_mm_and_find_vma_nested(mm, addr, regs, 0);
+}
 #endif /* CONFIG_LOCK_MM_AND_FIND_VMA */
 
 #else /* CONFIG_MMU */
@@ -555,16 +578,23 @@ fail:
  * At least xtensa ends up having protection faults even with no
  * MMU.. No stack expansion, at least.
  */
-struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
-			unsigned long addr, struct pt_regs *regs)
+struct vm_area_struct *lock_mm_and_find_vma_nested(struct mm_struct *mm,
+			unsigned long addr, struct pt_regs *regs,
+			int subclass)
 {
 	struct vm_area_struct *vma;
 
-	mmap_read_lock(mm);
+	mmap_read_lock_nested(mm, subclass);
 	vma = vma_lookup(mm, addr);
 	if (!vma)
 		mmap_read_unlock(mm);
 	return vma;
+}
+
+struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
+			unsigned long addr, struct pt_regs *regs)
+{
+	return lock_mm_and_find_vma_nested(mm, addr, regs, 0);
 }
 
 #endif /* CONFIG_MMU */

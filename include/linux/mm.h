@@ -2898,6 +2898,8 @@ void truncate_pagecache_range(struct inode *inode, loff_t offset, loff_t end);
 int generic_error_remove_folio(struct address_space *mapping,
 		struct folio *folio);
 
+struct vm_area_struct *lock_mm_and_find_vma_nested(struct mm_struct *mm,
+		unsigned long address, struct pt_regs *regs, int subclass);
 struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
 		unsigned long address, struct pt_regs *regs);
 
