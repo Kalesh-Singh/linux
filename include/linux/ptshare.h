@@ -22,6 +22,33 @@ static inline bool has_map_hugetlb_flag(unsigned long flags)
 	return flags & MAP_HUGETLB && !IS_ENABLED(CONFIG_PTSHARE);
 }
 
+/**
+ * ptdesc_get - Increment reference count on a page table descriptor
+ * @pt: The page table descriptor.
+ */
+static inline void ptdesc_get(struct ptdesc *pt)
+{
+	folio_get(ptdesc_folio(pt));
+}
+
+/**
+ * ptdesc_put - Decrement reference count on a page table descriptor
+ * @pt: The page table descriptor.
+ */
+static inline void ptdesc_put(struct ptdesc *pt)
+{
+	folio_put(ptdesc_folio(pt));
+}
+
+/**
+ * ptdesc_refcount - Return the reference count on a page table descriptor
+ * @pt: The page table descriptor.
+ */
+static inline int ptdesc_refcount(struct ptdesc *pt)
+{
+	return folio_ref_count(ptdesc_folio(pt));
+}
+
 #ifdef CONFIG_PTSHARE
 static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
 {
