@@ -3,6 +3,7 @@
 #define _LINUX_MMAP_LOCK_H
 
 /* Avoid a dependency loop by declaring here. */
+#include "linux/compiler_types.h"
 extern int rcuwait_wake_up(struct rcuwait *w);
 
 #include <linux/lockdep.h>
@@ -530,14 +531,6 @@ static inline void vma_assert_stabilised(struct vm_area_struct *vma)
 
 #endif /* CONFIG_PER_VMA_LOCK */
 
-static inline void mmap_write_lock(struct mm_struct *mm)
-{
-	__mmap_lock_trace_start_locking(mm, true);
-	down_write(&mm->mmap_lock);
-	mm_lock_seqcount_begin(mm);
-	__mmap_lock_trace_acquire_returned(mm, true, true);
-}
-
 static inline void mmap_write_lock_nested(struct mm_struct *mm, int subclass)
 {
 	__mmap_lock_trace_start_locking(mm, true);
@@ -546,16 +539,26 @@ static inline void mmap_write_lock_nested(struct mm_struct *mm, int subclass)
 	__mmap_lock_trace_acquire_returned(mm, true, true);
 }
 
-static inline int mmap_write_lock_killable(struct mm_struct *mm)
+static inline void mmap_write_lock(struct mm_struct *mm)
+{
+	mmap_write_lock_nested(mm, 0);
+}
+
+static inline int mmap_write_lock_killable_nested(struct mm_struct *mm, int subclass)
 {
 	int ret;
 
 	__mmap_lock_trace_start_locking(mm, true);
-	ret = down_write_killable(&mm->mmap_lock);
+	ret = down_write_killable_nested(&mm->mmap_lock, subclass);
 	if (!ret)
 		mm_lock_seqcount_begin(mm);
 	__mmap_lock_trace_acquire_returned(mm, true, ret == 0);
 	return ret;
+}
+
+static inline int mmap_write_lock_killable(struct mm_struct *mm)
+{
+	return mmap_write_lock_killable_nested(mm, 0);
 }
 
 /*
@@ -586,13 +589,6 @@ static inline void mmap_write_downgrade(struct mm_struct *mm)
 	downgrade_write(&mm->mmap_lock);
 }
 
-static inline void mmap_read_lock(struct mm_struct *mm)
-{
-	__mmap_lock_trace_start_locking(mm, false);
-	down_read(&mm->mmap_lock);
-	__mmap_lock_trace_acquire_returned(mm, false, true);
-}
-
 static inline void mmap_read_lock_nested(struct mm_struct *mm, int subclass)
 {
 	__mmap_lock_trace_start_locking(mm, false);
@@ -600,14 +596,9 @@ static inline void mmap_read_lock_nested(struct mm_struct *mm, int subclass)
 	__mmap_lock_trace_acquire_returned(mm, false, true);
 }
 
-static inline int mmap_read_lock_killable(struct mm_struct *mm)
+static inline void mmap_read_lock(struct mm_struct *mm)
 {
-	int ret;
-
-	__mmap_lock_trace_start_locking(mm, false);
-	ret = down_read_killable(&mm->mmap_lock);
-	__mmap_lock_trace_acquire_returned(mm, false, ret == 0);
-	return ret;
+	mmap_read_lock_nested(mm, 0);
 }
 
 static inline int mmap_read_lock_killable_nested(struct mm_struct *mm, int subclass)
@@ -620,14 +611,24 @@ static inline int mmap_read_lock_killable_nested(struct mm_struct *mm, int subcl
 	return ret;
 }
 
-static inline bool mmap_read_trylock(struct mm_struct *mm)
+static inline int mmap_read_lock_killable(struct mm_struct *mm)
 {
-	bool ret;
+	return mmap_read_lock_killable_nested(mm, 0);
+}
+
+static inline bool mmap_read_trylock_nested(struct mm_struct *mm, int subclass)
+{
+	int ret;
 
 	__mmap_lock_trace_start_locking(mm, false);
-	ret = down_read_trylock(&mm->mmap_lock) != 0;
-	__mmap_lock_trace_acquire_returned(mm, false, ret);
-	return ret;
+	ret = down_read_trylock_nested(&mm->mmap_lock, subclass);
+	__mmap_lock_trace_acquire_returned(mm, false, ret != 0);
+	return ret != 0;
+}
+
+static inline bool mmap_read_trylock(struct mm_struct *mm)
+{
+	return mmap_read_trylock_nested(mm, 0);
 }
 
 static inline void mmap_read_unlock(struct mm_struct *mm)

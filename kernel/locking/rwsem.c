@@ -1569,15 +1569,24 @@ int __sched down_read_killable(struct rw_semaphore *sem)
 EXPORT_SYMBOL(down_read_killable);
 
 /*
- * trylock for reading -- returns 1 if successful, 0 if contention
+ * nested trylock for reading -- returns 1 if successful, 0 if contention
  */
-int down_read_trylock(struct rw_semaphore *sem)
+int down_read_trylock_nested(struct rw_semaphore *sem, int subclass)
 {
 	int ret = __down_read_trylock(sem);
 
 	if (ret == 1)
-		rwsem_acquire_read(&sem->dep_map, 0, 1, _RET_IP_);
+		rwsem_acquire_read(&sem->dep_map, subclass, 1, _RET_IP_);
 	return ret;
+}
+EXPORT_SYMBOL(down_read_trylock_nested);
+
+/*
+ * trylock for reading -- returns 1 if successful, 0 if contention
+ */
+int down_read_trylock(struct rw_semaphore *sem)
+{
+	return down_read_trylock_nested(sem, 0);
 }
 EXPORT_SYMBOL(down_read_trylock);
 
