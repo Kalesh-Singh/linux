@@ -1821,6 +1821,9 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		if (tmp->vm_ops && tmp->vm_ops->open)
 			tmp->vm_ops->open(tmp);
 
+		if (vma_shares_pagetables(tmp))
+			ptshare_get_vma(tmp, vma_ptshare_desc(tmp));
+
 		file = tmp->vm_file;
 		if (file) {
 			struct address_space *mapping = file->f_mapping;
