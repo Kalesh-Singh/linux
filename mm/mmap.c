@@ -18,6 +18,7 @@
 #include <linux/mman.h>
 #include <linux/pagemap.h>
 #include <linux/ptshare.h>
+#include <linux/ptshare_vma.h>
 #include <linux/swap.h>
 #include <linux/syscalls.h>
 #include <linux/capability.h>
@@ -1827,6 +1828,9 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 
 		if (tmp->vm_ops && tmp->vm_ops->open)
 			tmp->vm_ops->open(tmp);
+
+		if (vma_shares_pagetables(tmp))
+			ptshare_get_vma(tmp);
 
 		file = tmp->vm_file;
 		if (file) {
