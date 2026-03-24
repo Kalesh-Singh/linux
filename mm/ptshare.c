@@ -15,10 +15,61 @@
 #include <linux/file.h>
 #include <linux/mm_inline.h>
 #include <linux/mmap_lock.h>
+#include <linux/mmu_notifier.h>
 #include <linux/slab.h>
 #include <linux/sched/mm.h>
 
+#include <asm/tlbflush.h>
+
 #include "internal.h"
+
+#ifdef CONFIG_X86
+static void ptshare_x86_flush_tlb_range_ipi(void *data)
+{
+	count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
+
+	/*
+	 * If INVPCID is available, use it to flush all non-global
+	 * mappings across all PCIDs. This avoids unnecessary
+	 * flushing of kernel (global) mappings.
+	 */
+	if (static_cpu_has(X86_FEATURE_INVPCID)) {
+		invpcid_flush_all_nonglobals();
+	} else {
+		/* Fallback to flushing everything if INVPCID is not supported */
+		__flush_tlb_all();
+	}
+}
+#else
+static void ptshare_x86_flush_tlb_range_ipi(void *data)
+{
+}
+#endif
+
+static int ptshare_invalidate_range_start(struct mmu_notifier *mn,
+				       const struct mmu_notifier_range *range)
+{
+	return 0;
+}
+
+static void ptshare_invalidate_range_end(struct mmu_notifier *mn,
+				       const struct mmu_notifier_range *range)
+{
+	/*
+	 * Global TLB Broadcast (IPI):
+	 *
+	 * Since ptshare_mm is a "headless" address space, we must broadcast
+	 * invalidations to all CPUs to reach guest processes.
+	 */
+	if (IS_ENABLED(CONFIG_X86))
+		on_each_cpu(ptshare_x86_flush_tlb_range_ipi, (void *)range, 1);
+}
+
+static const struct mmu_notifier_ops ptshare_mmu_notifier_ops = {
+	.invalidate_range_start = ptshare_invalidate_range_start,
+	.invalidate_range_end = ptshare_invalidate_range_end,
+};
+
 
 static inline void mmap_lock_set_ptshare_class(struct mm_struct *mm)
 {
@@ -33,19 +84,29 @@ struct ptshare_desc *ptshare_alloc_desc(void)
 
 	desc = kzalloc_obj(struct ptshare_desc);
 	if (!desc)
-		return NULL;
+		goto out_err;
 
 	desc->ptshare_mm = mm_alloc();
-	if (!desc->ptshare_mm) {
-		kfree(desc);
-		return NULL;
-	}
+	if (!desc->ptshare_mm)
+		goto free_desc;
 
 	mmap_lock_set_ptshare_class(desc->ptshare_mm);
 
 	refcount_set(&desc->refcount, 1);
 
+	/* Initialize mmu_notifier */
+	desc->mmu_notifier.ops = &ptshare_mmu_notifier_ops;
+	if (mmu_notifier_register(&desc->mmu_notifier, desc->ptshare_mm))
+		goto free_mm;
+
 	return desc;
+
+free_mm:
+	mmput(desc->ptshare_mm);
+free_desc:
+	kfree(desc);
+out_err:
+	return NULL;
 }
 
 /*
@@ -62,6 +123,7 @@ struct ptshare_desc *ptshare_alloc_desc(void)
  */
 static void ptshare_free_desc(struct ptshare_desc *desc)
 {
+	mmu_notifier_unregister(&desc->mmu_notifier, desc->ptshare_mm);
 	mmput(desc->ptshare_mm);
 	kfree(desc);
 }

@@ -9,6 +9,7 @@
 struct ptshare_desc {
 	/* The headless shadow MM for this domain */
 	struct mm_struct *ptshare_mm;
+	struct mmu_notifier mmu_notifier;
 	refcount_t refcount;
 };
 
