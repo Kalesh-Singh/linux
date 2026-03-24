@@ -389,3 +389,47 @@ unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr)
 
 	return addr;
 }
+
+/**
+ * ptshare_vma_skip_zap_pte_range - Check if zapping should be skipped.
+ * @vma: The VMA being zapped.
+ *
+ * If this VMA shares page tables, we must NOT call zap_pte_range().
+ * zap_pte_range() would unmap all 512 PTEs and drop the page
+ * mapcounts, which would maliciously affect all other processes
+ * sharing these same page tables.
+ *
+ * Instead, we skip the PTE-level walk entirely. The PMD entry
+ * itself will be cleared later by free_pgtables(), detaching
+ * this process from the shared page table without destroying
+ * the shared mappings for others.
+ */
+bool ptshare_vma_skip_zap_pte_range(struct vm_area_struct *vma)
+{
+	return unlikely(vma_shares_pagetables(vma));
+}
+
+/**
+ * ptshare_free_pte_range - Safely reclaim shared page tables.
+ * @ptdesc: Descriptor for the page table page being freed.
+ *
+ * During unmapping or process teardoen, we must ensure that shared
+ * page tables are not accidentally reclaimed while still in use by
+ * other processes.
+ *
+ * If the page table is shared (refcount > 1), we decrement its reference
+ * count and return true to indicate that the caller (guest MM) should NOT
+ * free the physical page. The last participant (often the manager MM) will
+ * handle the actual reclamation.
+ */
+bool ptshare_free_pte_range(pgtable_t ptdesc)
+{
+	struct ptdesc *pt = page_ptdesc(ptdesc);
+
+	if (ptdesc_refcount(pt) > 1) {
+		ptdesc_put(pt);
+		return true;
+	}
+
+	return false;
+}
