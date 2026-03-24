@@ -96,6 +96,10 @@ void ptshare_put_vma(struct vm_area_struct *vma, struct ptshare_desc *desc);
 unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr);
 
 vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf);
+
+bool ptshare_vma_skip_zap_pte_range(struct vm_area_struct *vma);
+
+bool ptshare_free_pte_range(pgtable_t ptdesc);
 #else /* !CONFIG_PTSHARE */
 static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
 {
@@ -152,6 +156,16 @@ static inline unsigned long ptshare_install_vma(struct mm_struct *mm,
 static inline vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf)
 {
 	return VM_FAULT_SIGBUS;
+}
+
+static inline bool ptshare_vma_skip_zap_pte_range(struct vm_area_struct *vma)
+{
+	return false;
+}
+
+static inline bool ptshare_free_pte_range(pgtable_t ptdesc)
+{
+	return false;
 }
 #endif /* CONFIG_PTSHARE */
 
