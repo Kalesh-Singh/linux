@@ -192,6 +192,12 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 {
 	pgtable_t token = pmd_pgtable(*pmd);
 	pmd_clear(pmd);
+
+	if (ptshare_free_pte_range(tlb->mm, token)) {
+		mm_dec_nr_ptes(tlb->mm);
+		return;
+	}
+
 	pte_free_tlb(tlb, token, addr);
 	mm_dec_nr_ptes(tlb->mm);
 }
@@ -2019,6 +2025,12 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 			addr = next;
 			continue;
 		}
+
+		if (ptshare_vma_skip_zap_pte_range(vma)) {
+			addr = next;
+			continue;
+		}
+
 		addr = zap_pte_range(tlb, vma, pmd, addr, next, details);
 		if (addr != next)
 			pmd--;
