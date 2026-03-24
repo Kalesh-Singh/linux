@@ -5,6 +5,7 @@
  * Copyright (c) 2026, Google LLC.
  * Author: Kalesh Singh <kaleshsingh@google.com>
  */
+#include "linux/kconfig.h"
 #include <linux/ptshare.h>
 #include <linux/ptshare_vma.h>
 
@@ -14,8 +15,12 @@
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
 #include <linux/mman.h>
+#include <linux/mmu_notifier.h>
 #include <linux/sched/mm.h>
+#include <linux/smp.h>
 #include <linux/xarray.h>
+
+#include <asm/tlbflush.h>
 
 #include "internal.h"
 
@@ -384,6 +389,50 @@ vm_fault_t ptshare_handle_fault(struct vm_fault *vmf)
 	return ret;
 }
 
+#ifdef CONFIG_X86
+static void ptshare_x86_flush_tlb_range_ipi(void *data)
+{
+	count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
+
+	/*
+	 * If INVPCID is available, use it to flush all non-global
+	 * mappings across all PCIDs. This avoids unnecessary
+	 * flushing of kernel (global) mappings.
+	 */
+	if (static_cpu_has(X86_FEATURE_INVPCID)) {
+		invpcid_flush_all_nonglobals();
+	} else {
+		/* Fallback to flushing everything if INVPCID is not supported */
+		__flush_tlb_all();
+	}
+}
+#else
+static void ptshare_x86_flush_tlb_range_ipi(void *data)
+{
+}
+#endif
+
+static int ptshare_invalidate_range_start(struct mmu_notifier *mn,
+				       const struct mmu_notifier_range *range)
+{
+	return 0;
+}
+
+static void ptshare_invalidate_range_end(struct mmu_notifier *mn,
+				       const struct mmu_notifier_range *range)
+{
+	if (IS_ENABLED(CONFIG_X86))
+		on_each_cpu(ptshare_x86_flush_tlb_range_ipi, (void *)range, 1);
+}
+
+static const struct mmu_notifier_ops ptshare_mmu_notifier_ops = {
+	.invalidate_range_start = ptshare_invalidate_range_start,
+	.invalidate_range_end = ptshare_invalidate_range_end,
+};
+
+static struct mmu_notifier ptshare_mmu_notifier = {
+	.ops = &ptshare_mmu_notifier_ops,
+};
 
 static int __init ptshare_init(void)
 {
@@ -391,6 +440,6 @@ static int __init ptshare_init(void)
 	if (!ptshare_mm)
 		return -ENOMEM;
 
-	return 0;
+	return mmu_notifier_register(&ptshare_mmu_notifier, ptshare_mm);
 }
 core_initcall(ptshare_init);
