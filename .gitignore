@@ -184,3 +184,6 @@ sphinx_*/
 
 # Rust analyzer configuration
 /rust-project.json
+
+# Ptshare dev
+ptshare_tests/ptshare_test
