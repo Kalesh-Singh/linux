@@ -405,15 +405,19 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
 
 	ret = ptshare_validate_mmap(file, addr, len, prot, flags, vm_flags, pgoff);
-	if (ret)
+	if (ret) {
+		ptshare_mm_err(mm, "do_mmap: ptshare_validate_mmap failed: %d\n", ret);
 		return ret;
+	}
 
 	/* Obtain the address to map to. we verify (or select) it and ensure
 	 * that it represents a valid section of the address space.
 	 */
 	addr = __get_unmapped_area(file, addr, len, pgoff, flags, vm_flags);
-	if (IS_ERR_VALUE(addr))
+	if (IS_ERR_VALUE(addr)) {
+		ptshare_mm_err(mm, "do_mmap: __get_unmapped_area failed: 0x%lx\n", addr);
 		return addr;
+	}
 
 	if (flags & MAP_FIXED_NOREPLACE) {
 		if (find_vma_intersection(mm, addr, addr + len))

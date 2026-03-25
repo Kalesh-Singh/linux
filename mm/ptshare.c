@@ -51,28 +51,37 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 		return 0;
 
 	/* Only support file-backed mappings */
-	if (unlikely(!file))
+	if (unlikely(!file)) {
+		ptshare_mm_err(current->mm, "ptshare_validate_mmap: file is NULL\n");
 		return -EINVAL;
+	}
 
 	/*
 	 * Writable mappings must be shared; private writable mappings
 	 * would require complex CoW logic for the shared page tables
 	 * themselves.
 	 */
-	if (unlikely((prot & PROT_WRITE) && !(flags & MAP_SHARED)))
+	if (unlikely((prot & PROT_WRITE) && !(flags & MAP_SHARED))) {
+		ptshare_mm_err(current->mm, "ptshare_validate_mmap: writable mapping must be MAP_SHARED\n");
 		return -EINVAL;
+	}
 
 	/*
 	 * Precise address control is required to guarantee the
 	 * mapping covers the entire PMD range.
 	 */
-	if (unlikely(!(flags & MAP_FIXED)))
+	if (unlikely(!(flags & MAP_FIXED))) {
+		ptshare_mm_err(current->mm, "ptshare_validate_mmap: MAP_FIXED not set\n");
 		return -EINVAL;
+	}
 
 	/* Require PMD alignment of both base and size */
 	if (unlikely(!IS_ALIGNED(addr, PMD_SIZE) ||
-		     !IS_ALIGNED(len, PMD_SIZE)))
+		     !IS_ALIGNED(len, PMD_SIZE))) {
+		ptshare_mm_err(current->mm, "ptshare_validate_mmap: addr (0x%lx) or len (0x%lx) not PMD aligned (PMD_SIZE: 0x%lx)\n",
+				addr, len, PMD_SIZE);
 		return -EINVAL;
+	}
 
 	/* The global shared MM should never be the caller of this syscall */
 	BUG_ON(current->mm == ptshare_mm);
@@ -92,8 +101,11 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 	 * range, reject the request to prevent conflicts in the shared
 	 * page tables.
 	 */
-	if (vma)
+	if (vma) {
+		ptshare_mm_err(current->mm, "ptshare_validate_mmap: intersection with existing VMA [0x%lx, 0x%lx)\n",
+				vma->vm_start, vma->vm_end);
 		ret = -EINVAL;
+	}
 
 	return ret;
 }
