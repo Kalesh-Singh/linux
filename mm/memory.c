@@ -6422,7 +6422,7 @@ retry_pud:
 		return VM_FAULT_OOM;
 
 	if (unlikely(vma_shares_pagetables(vma)))
-		return ptshare_do_page_fault(&vmf);
+		return ptshare_handle_mm_fault(&vmf);
 
 	/* Huge pud page fault raced with pmd_alloc? */
 	if (pud_trans_unstable(vmf.pud))
