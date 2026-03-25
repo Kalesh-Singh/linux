@@ -56,6 +56,7 @@
 #include <linux/sched/mm.h>
 #include <linux/sched/task.h>
 #include <linux/pagemap.h>
+#include <linux/ptshare.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/slab.h>
@@ -2849,6 +2850,9 @@ static void rmap_walk_anon(struct folio *folio,
 		VM_BUG_ON_VMA(address == -EFAULT, vma);
 		cond_resched();
 
+		if (unlikely(vma_shares_pagetables(vma)))
+			continue;
+
 		if (rwc->invalid_vma && rwc->invalid_vma(vma, rwc->arg))
 			continue;
 
@@ -2911,6 +2915,9 @@ lookup:
 
 		VM_BUG_ON_VMA(address == -EFAULT, vma);
 		cond_resched();
+
+		if (unlikely(vma_shares_pagetables(vma)))
+			continue;
 
 		if (rwc->invalid_vma && rwc->invalid_vma(vma, rwc->arg))
 			continue;
