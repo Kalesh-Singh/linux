@@ -7,6 +7,9 @@
 #include "vma_internal.h"
 #include "vma.h"
 
+#include <linux/ptshare_vma.h>
+#include <linux/ptshare.h>
+
 struct mmap_state {
 	struct mm_struct *mm;
 	struct vma_iterator *vmi;
@@ -468,6 +471,9 @@ void remove_vma(struct vm_area_struct *vma)
 		fput(vma->vm_file);
 	mpol_put(vma_policy(vma));
 	vm_area_free(vma);
+
+	if (vma_shares_pagetables(vma))
+		ptshare_put_vma(vma);
 }
 
 /*
