@@ -328,7 +328,7 @@ vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf)
 	 * so the shared page table is not freed prematurely when a
 	 * single sharing process unmaps the region.
 	 */
-	if (!(ret & VM_FAULT_ERROR) && (ret & VM_FAULT_COMPLETED) && !pmd_none(*ptshare_vmf.pmd)) {
+	if (!(ret & (VM_FAULT_ERROR | VM_FAULT_RETRY)) && !pmd_none(*ptshare_vmf.pmd)) {
 		spinlock_t *ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
 
 		if (pmd_none(*vmf->pmd)) {
@@ -343,10 +343,16 @@ vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf)
 
 out:
 	/*
-	 * If handle_pte_fault() has not dropped the fault lock,
-	 * do it now.
+	 * If handle_pte_fault() returned RETRY or COMPLETED, it already
+	 * dropped the manager lock; we must also drop the guest lock to
+	 * follow the fault handler contract.
+	 *
+	 * Otherwise, we release the manager lock we acquired and let the
+	 * caller release the guest lock.
 	 */
-	if (!(ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED)))
+	if (ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED))
+		release_fault_lock(vmf);
+	else
 		release_fault_lock(&ptshare_vmf);
 
 	return ret;

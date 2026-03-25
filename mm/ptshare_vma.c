@@ -93,10 +93,8 @@ static inline int ptshare_vma_refcount_inc(struct vm_area_struct *vma)
 	return ptshare_vma_refcount_add(vma, 1);
 }
 
-static inline void ptshare_remove_vma_locked(struct vm_area_struct *vma)
+static inline void ptshare_remove_vma(struct vm_area_struct *vma)
 {
-	ptshare_vma_refcount_destroy_locked(vma);
-
 	/* Destroy the shadow VMA in ptshare_mm */
 	mmap_write_lock_nested(ptshare_mm, SINGLE_DEPTH_NESTING);
 	BUG_ON(do_munmap(ptshare_mm, vma->vm_start, vma->vm_end - vma->vm_start, NULL));
@@ -110,17 +108,51 @@ void ptshare_get_vma(struct vm_area_struct *vma)
 	BUG_ON(ret < 0);
 }
 
+/**
+ * ptshare_put_vma - Release a reference to a shared VMA.
+ * @vma: The guest VMA.
+ *
+ * This function implements a decoupled locking protocol to safely manage
+ * the lifecycle of shared VMAs:
+ *
+ * 1. Atomic Synchronization: We use the XArray's internal spinlock (xa_lock)
+ *    to protect the reference count.
+ * 2. Exclusive Ownership: If the reference count drops to zero under the
+ *    xa_lock, the current thread acquires exclusive responsibility for
+ *    destroying the shadow VMA.
+ * 3. Preventing Races: By calling ptshare_vma_refcount_destroy_locked()
+ *    (xa_erase) while still holding the spinlock, we ensure that any
+ *    concurrent thread attempting to look up the VMA to increment its
+ *    refs will fail.
+ * 4. decoupled Destruction: Once the VMA is erased from the XArray, it is
+ *    mathematically impossible for another thread to find it and resurrect
+ *    the refcount. Therefore, it is safe to drop the spinlock (avoiding
+ *    atomic vs. sleeping lock violations) and proceed to perform the
+ *    high-latency unmapping operations (which may sleep) using the
+ *    ptshare_mm's mmap_lock.
+ * 5. Collision Prevention: During the window between XArray erasure and
+ *    the final do_munmap(ptshare_mm), any concurrent attempt to install
+ *    an overlapping shared VMA will be rejected by ptshare_validate_mmap()
+ *    because the VMA remains in the ptshare_mm tree until the unmap
+ *    operation completes.
+ */
 void ptshare_put_vma(struct vm_area_struct *vma)
 {
 	int refs;
+	bool should_remove = false;
 
 	ptshare_vma_refcount_lock();
 
 	refs = ptshare_vma_refcount_dec_locked(vma);
 	BUG_ON(refs < 0);
 
-	if (!refs)
-		ptshare_remove_vma_locked(vma);
+	if (!refs) {
+		ptshare_vma_refcount_destroy_locked(vma);
+		should_remove = true;
+	}
 
 	ptshare_vma_refcount_unlock();
+
+	if (should_remove)
+		ptshare_remove_vma(vma);
 }
