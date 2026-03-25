@@ -291,13 +291,6 @@ vm_fault_t ptshare_handle_mm_fault(struct vm_area_struct *ptshare_vma,
 	ret = handle_pte_fault(&ptshare_vmf);
 
 	/*
-	 * handle_pte_fault() has dropped the ptshare_mm lock.
-	 * The caller will handle dropping the faulting process's lock.
-	 */
-	if (ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED))
-		return ret;
-
-	/*
 	 * PMD Splicing:
 	 * The ptshare_mm now has a populated PTE page table.
 	 * We "splice" this shared PTE page table directly into the
@@ -305,7 +298,7 @@ vm_fault_t ptshare_handle_mm_fault(struct vm_area_struct *ptshare_vma,
 	 * so the shared page table is not freed prematurely when a
 	 * single sharing process unmaps the region.
 	 */
-	if (!(ret & VM_FAULT_ERROR) && !pmd_none(*ptshare_vmf.pmd)) {
+	if (!(ret & VM_FAULT_ERROR) && (ret & VM_FAULT_COMPLETED) && !pmd_none(*ptshare_vmf.pmd)) {
 		spinlock_t *ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
 
 		if (pmd_none(*vmf->pmd)) {
@@ -318,6 +311,16 @@ vm_fault_t ptshare_handle_mm_fault(struct vm_area_struct *ptshare_vma,
 		spin_unlock(ptl);
 	}
 
+	if (ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED)) {
+		/*
+		 * handle_pte_fault has dropped the ptshare_mm lock.
+		 * Now we must drop the faulting process's lock.
+		 */
+		release_fault_lock(vmf);
+
+		return ret;
+	}
+
 	return ret;
 }
 
@@ -326,6 +329,8 @@ vm_fault_t ptshare_do_page_fault(struct vm_fault *vmf)
 	unsigned int flags = vmf->flags	& ~FAULT_FLAG_VMA_LOCK;
 	struct vm_area_struct *ptshare_vma;
 	vm_fault_t ret;
+
+	assert_fault_locked(vmf);
 
 	/*
 	 * Phase 1: Optimistic Per-VMA Lock
@@ -366,7 +371,7 @@ vm_fault_t ptshare_do_page_fault(struct vm_fault *vmf)
 	 * If handle_pte_fault() returned RETRY, it already dropped the
 	 * mmap_lock.
 	 */
-	if (!(ret & VM_FAULT_RETRY))
+	if (!(ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED)))
 		mmap_read_unlock(ptshare_mm);
 
 	return ret;
