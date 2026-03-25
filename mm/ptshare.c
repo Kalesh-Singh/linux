@@ -297,23 +297,25 @@ vm_fault_t ptshare_handle_mm_fault(struct vm_area_struct *ptshare_vma,
 	if (ret & (VM_FAULT_RETRY | VM_FAULT_COMPLETED))
 		return ret;
 
+	/*
+	 * PMD Splicing:
+	 * The ptshare_mm now has a populated PTE page table.
+	 * We "splice" this shared PTE page table directly into the
+	 * faulting process's PMD. We increment the ptdesc refcount
+	 * so the shared page table is not freed prematurely when a
+	 * single sharing process unmaps the region.
+	 */
 	if (!(ret & VM_FAULT_ERROR) && !pmd_none(*ptshare_vmf.pmd)) {
-		/*
-		 * PMD Splicing:
-		 * The ptshare_mm now has a populated PTE page table.
-		 * We "splice" this shared PTE page table directly into the
-		 * faulting process's PMD. We increment the ptdesc refcount
-		 * so the shared page table is not freed prematurely when a
-		 * single sharing process unmaps the region.
-		 *
-		 * The faulting process's PMD lock is already held by the caller.
-		 */
+		spinlock_t *ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
+
 		if (pmd_none(*vmf->pmd)) {
 			ptdesc = page_ptdesc(pmd_page(*ptshare_vmf.pmd));
 			ptdesc_get(ptdesc);
 			set_pmd_at(vmf->vma->vm_mm, vmf->address, vmf->pmd, *ptshare_vmf.pmd);
 			mm_inc_nr_ptes(vmf->vma->vm_mm);
 		}
+
+		spin_unlock(ptl);
 	}
 
 	return ret;
@@ -366,37 +368,6 @@ vm_fault_t ptshare_do_page_fault(struct vm_fault *vmf)
 	 */
 	if (!(ret & VM_FAULT_RETRY))
 		mmap_read_unlock(ptshare_mm);
-
-	return ret;
-}
-
-/**
- * ptshare_handle_fault - High-level entry point for shared page table faults.
- * @vmf: The fault descriptor.
- *
- * This function intercepts faults in VMAs that share page tables. It manages
- * the synchronization of the faulting process's PMD and coordinates the
- * splicing of shared PTE tables from the global manager MM (ptshare_mm).
- *
- * Locking semantics:
- * 1. Guest PMD Protection: The faulting process's PMD lock is acquired to
- *    protect the private directory during directory population and atomic
- *    PMD splicing. This ensures consistency against concurrent teardown or
- *    modification of the guest's page tables.
- * 2. Manager Lifecycle: Delegates to ptshare_do_page_fault() to manage the
- *    locking lifecycle of the ptshare_mm (RCU or mmap_lock).
- * 3. Atomic Splicing: The actual PMD copy is performed under the guest
- *    PMD lock, ensuring that the transition from 'none' to 'populated shared'
- *    is atomic for other threads.
- *
- * Return: A vm_fault_t result from the shared fault handler.
- */
-vm_fault_t ptshare_handle_fault(struct vm_fault *vmf)
-{
-	spinlock_t *ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
-	vm_fault_t ret = ptshare_do_page_fault(vmf);
-
-	spin_unlock(ptl);
 
 	return ret;
 }

@@ -58,7 +58,6 @@ unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr);
 vm_fault_t ptshare_handle_mm_fault(struct vm_area_struct *ptshare_vma,
 				 struct vm_fault *vmf, unsigned int flags);
 vm_fault_t ptshare_do_page_fault(struct vm_fault *vmf);
-vm_fault_t ptshare_handle_fault(struct vm_fault *vmf);
 bool ptshare_vma_skip_zap_pte_range(struct vm_area_struct *vma);
 bool ptshare_free_pte_range(struct mm_struct *mm, pgtable_t token);
 #else /* !CONFIG_PTSHARE */
@@ -84,11 +83,6 @@ static inline vm_fault_t ptshare_handle_mm_fault(struct vm_area_struct *ptshare_
 }
 
 static inline vm_fault_t ptshare_do_page_fault(struct vm_fault *vmf)
-{
-	return VM_FAULT_SIGBUS;
-}
-
-static inline vm_fault_t ptshare_handle_fault(struct vm_fault *vmf)
 {
 	return VM_FAULT_SIGBUS;
 }
