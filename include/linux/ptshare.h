@@ -4,6 +4,9 @@
 #include <linux/mm_types.h>
 #include <linux/mm.h>
 
+/* TODO: Remove */
+#include <linux/ptshare_debug.h>
+
 extern struct mm_struct *ptshare_mm;
 
 static inline bool vma_shares_pagetables(const struct vm_area_struct *vma)
