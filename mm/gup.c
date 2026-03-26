@@ -19,6 +19,8 @@
 #include <linux/migrate.h>
 #include <linux/mm_inline.h>
 #include <linux/pagevec.h>
+#include <linux/ptshare.h>
+#include <linux/ptshare_vma.h>
 #include <linux/sched/mm.h>
 #include <linux/shmem_fs.h>
 
@@ -1411,6 +1413,14 @@ static long __get_user_pages(struct mm_struct *mm,
 			ret = check_vma_flags(vma, gup_flags);
 			if (ret)
 				goto out;
+
+			if (unlikely(vma_shares_pagetables(vma)) &&
+			    (gup_flags & FOLL_WRITE)) {
+				ret = ptshare_unshare_vma_on_gup(vma, *locked);
+				if (ret)
+					goto out;
+				goto retry;
+			}
 		}
 retry:
 		/*
