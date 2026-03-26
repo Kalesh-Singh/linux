@@ -13,13 +13,17 @@
 #include <linux/ptshare.h>
 
 #include <linux/file.h>
+#include <linux/hugetlb.h>
 #include <linux/mm_inline.h>
 #include <linux/mmap_lock.h>
 #include <linux/mmu_notifier.h>
+#include <linux/pgalloc.h>
+#include <linux/rmap.h>
 #include <linux/slab.h>
 #include <linux/sched/mm.h>
 
 #include <asm/tlbflush.h>
+#include <asm-generic/tlb.h>
 
 #include "internal.h"
 
@@ -637,4 +641,159 @@ bool ptshare_free_pte_range(pgtable_t ptdesc)
 	}
 
 	return false;
+}
+
+/**
+ * ptshare_unshare_vma_on_gup - Fully sever a VMA from ptshare infrastructure.
+ * @vma: The guest VMA.
+ * @locked: indicates whether the mmap read lock is already held (from GUP).
+ *
+ * This function iterates through all PMDs in the VMA, allocates private
+ * page tables for the faulting process, copies the shared PTEs into them,
+ * and increments the page reference and mapcounts so the new private mapping
+ * is correctly tracked by rmap.
+ *
+ * Context: Called from __get_user_pages() when FOLL_WRITE is requested on a
+ * shared VMA. It handles the transition from mmap_read_lock to mmap_write_lock.
+ *
+ * Return: 0 on success, or -errno. If successful, the VMA is no longer shared.
+ */
+int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma, int locked)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	unsigned long addr;
+	int ret = 0;
+
+	if (!vma_shares_pagetables(vma))
+		return 0;
+
+	/*
+	 * We must be in a write-locked context to modify vma->vm_flags and
+	 * safely manipulate page table structures.
+	 *
+	 * Upgrade from read lock if necessary.
+	 */
+	if (locked)
+		mmap_read_unlock(mm);
+
+	ret = mmap_write_lock_killable(mm);
+	if (ret)
+		goto out;
+
+	/* Re-verify under write lock */
+	if (!vma_shares_pagetables(vma))
+		goto out_unlock;
+
+	for (addr = vma->vm_start; addr < vma->vm_end; addr += PMD_SIZE) {
+		pgd_t *pgd;
+		p4d_t *p4d;
+		pud_t *pud;
+		pmd_t *pmd;
+		pmd_t pmdval;
+		spinlock_t *ptl;
+		struct ptdesc *new_ptdesc, *old_ptdesc;
+		pte_t *old_ptep, *new_ptep;
+		int i;
+
+		pgd = pgd_offset(mm, addr);
+		if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd)))
+			continue;
+		p4d = p4d_offset(pgd, addr);
+		if (p4d_none(*p4d) || unlikely(p4d_bad(*p4d)))
+			continue;
+		pud = pud_offset(p4d, addr);
+		if (pud_none(*pud) || unlikely(pud_bad(*pud)))
+			continue;
+		pmd = pmd_offset(pud, addr);
+		pmdval = pmdp_get_lockless(pmd);
+
+		/* Skip if the PMD is empty, huge, or not present */
+		if (pmd_none(pmdval) || !pmd_present(pmdval) || pmd_trans_huge(pmdval))
+			continue;
+
+		/* Allocate the new private page table */
+		new_ptdesc = page_ptdesc(pte_alloc_one(mm));
+		if (!new_ptdesc) {
+			ret = -ENOMEM;
+			goto out_unlock;
+		}
+
+		ptl = pmd_lock(mm, pmd);
+		if (unlikely(!pmd_same(*pmd, pmdval))) {
+			/* PMD changed under us, abort and retry */
+			spin_unlock(ptl);
+			pte_free(mm, ptdesc_page(new_ptdesc));
+			continue;
+		}
+
+		old_ptdesc = page_ptdesc(pmd_page(*pmd));
+
+		old_ptep = pte_offset_map(pmd, addr);
+		new_ptep = (pte_t *)page_address(ptdesc_page(new_ptdesc));
+
+		/* Copy PTEs and elevate refcounts so rmap sees the new mapping */
+		for (i = 0; i < PTRS_PER_PTE; i++) {
+			pte_t pte = ptep_get(old_ptep + i);
+
+			if (pte_present(pte)) {
+				struct page *page = pte_page(pte);
+				struct folio *folio = page_folio(page);
+
+				folio_get(folio);
+				folio_add_file_rmap_pte(folio, page, vma);
+			}
+
+			set_pte_at(mm, addr + i * PAGE_SIZE, new_ptep + i, pte);
+		}
+
+		/* Atomically detach the old shared page table from the PMD */
+		pmd_clear(pmd);
+		/* Install the newly populated private page table */
+		pmd_populate(mm, pmd, ptdesc_page(new_ptdesc));
+
+		spin_unlock(ptl);
+		pte_unmap(old_ptep);
+
+		/*
+		 * Synchronization Protocol (Clear-then-Sync):
+		 * To safely synchronize with gup_fast(), we must ensure that no
+		 * CPU is locklessly walking the old shared page tables before
+		 * we drop the reference:
+		 *
+		 * 1. Detach: By calling pmd_populate() above, we have already
+		 *    replaced the entry. New walkers will now only see the
+		 *    new private table.
+		 * 2. Synchronize: We now call tlb_remove_table_sync_one() to
+		 *    broadcast an IPI. Any CPU executing gup_fast() cannot
+		 *    acknowledge the IPI until it re-enables interrupts,
+		 *    guaranteeing it has finished its walk if it already
+		 *    dereferenced the old PMD.
+		 * 3. Free/Put: Now it is safe to drop the reference to the
+		 *    old shared page table.
+		 */
+		tlb_remove_table_sync_one();
+
+		/* Drop the reference we held from the initial PMD splice */
+		ptdesc_put(old_ptdesc);
+	}
+
+	/* Drop the reference to the manager's shadow VMA */
+	ptshare_put_vma(vma, vma_ptshare_desc(vma));
+
+	/*
+	 * Transition the VMA to a normal private mapping.
+	 *
+	 * This must be the last step after the ptshare_put_vma() above.
+	 */
+	vm_flags_clear(vma, VM_PT_SHARED);
+
+out_unlock:
+	mmap_write_unlock(mm);
+
+out:
+	/* Restore the read lock for the caller */
+	if (locked)
+		mmap_read_lock(mm);
+
+	return ret;
 }
