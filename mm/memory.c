@@ -4168,6 +4168,8 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	struct folio *folio = NULL;
 	pte_t pte;
 
+	BUG_ON(vma_shares_pagetables(vma));
+
 	if (likely(!unshare)) {
 		if (userfaultfd_pte_wp(vma, ptep_get(vmf->pte))) {
 			if (!userfaultfd_wp_async(vma)) {
@@ -5827,6 +5829,8 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	struct folio *folio;
 	vm_fault_t ret;
+
+	BUG_ON(vma_shares_pagetables(vma));
 
 	ret = vmf_can_call_fault(vmf);
 	if (!ret)
