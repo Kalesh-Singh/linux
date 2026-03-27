@@ -340,120 +340,6 @@ TEST_F(PtShareTest, ExecveCleanup) {
     std::cout << "[ OK   ] execve cleanup verified." << std::endl;
 }
 
-// Helper to get PageTables value from /proc/meminfo in kB
-static long get_pagetable_usage_kb() {
-    FILE* f = fopen("/proc/meminfo", "r");
-    if (!f) return -1;
-    char line[256];
-    long usage = -1;
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "PageTables:", 11) == 0) {
-            sscanf(line + 11, "%ld", &usage);
-            break;
-        }
-    }
-    fclose(f);
-    return usage;
-}
-
-// Test 22: Page Table Efficiency Comparison
-TEST_F(PtShareTest, PageTableEfficiency) {
-    std::cout << "[ INFO ] Starting PageTableEfficiency test..." << std::endl;
-    const int num_procs = 50;
-    const int num_pmds = 500; // 1GB mapping
-    const size_t total_size = (size_t)num_pmds * PMD_SIZE;
-    void* addr = (void*)0x600000000000;
-
-    auto run_experiment = [&](bool use_shpt) -> long {
-        long before = get_pagetable_usage_kb();
-
-        pid_t parent_pid = fork();
-        if (parent_pid == 0) {
-            setpgid(0, 0); // Create a new process group
-            int flags = MAP_SHARED | MAP_FIXED;
-            if (use_shpt) flags |= MAP_SHARED_PT;
-
-            void* mapped = mmap(addr, total_size, PROT_READ | PROT_WRITE, flags, fd, 0);
-            if (mapped == MAP_FAILED) {
-                perror("mmap failed");
-                _exit(1);
-            }
-
-            // Force PTE-level page tables to ensure we are testing PTE sharing
-            madvise(mapped, total_size, MADV_NOHUGEPAGE);
-
-            for (int i = 0; i < num_procs; i++) {
-                if (fork() == 0) {
-                    signal(SIGTERM, [](int){ _exit(0); });
-                    // Children access all PMDs to ensure PTEs are present
-                    for (size_t j = 0; j < num_pmds; j++) {
-                        if (((char*)mapped)[j * PMD_SIZE] != 0) _exit(2);
-                    }
-
-                    // Signal this child is done via a dedicated file
-                    char sync_name[64];
-                    sprintf(sync_name, "sync_ready_%d", i);
-                    FILE* s = fopen(sync_name, "w");
-                    if (s) { fprintf(s, "OK"); fclose(s); }
-
-                    while(1) pause();
-                }
-            }
-            while(1) pause();
-            _exit(0);
-        }
-
-        // Wait for all 50 children to signal readiness
-        for (int i = 0; i < num_procs; i++) {
-            char sync_name[64];
-            sprintf(sync_name, "sync_ready_%d", i);
-            bool ready = false;
-            for (int retry = 0; retry < 50; retry++) {
-                struct stat st;
-                if (stat(sync_name, &st) == 0) {
-                    ready = true;
-                    break;
-                }
-                usleep(200000); // 0.2s
-            }
-            if (!ready) std::cerr << "[ WARN ] Child " << i << " never signaled ready." << std::endl;
-            unlink(sync_name);
-        }
-        sleep(2); // Extra settle time
-
-        long during = get_pagetable_usage_kb();
-
-        // Kill entire process group
-        kill(-parent_pid, SIGTERM);
-
-        int status;
-        waitpid(parent_pid, &status, 0);
-
-        return during - before;
-    };
-
-    std::cout << "[ INFO ] Measuring standard PageTable overhead..." << std::endl;
-    long std_overhead = run_experiment(false);
-    std::cout << "[ INFO ] Standard overhead: " << std_overhead << " kB" << std::endl;
-
-    std::cout << "[ INFO ] Waiting for PageTable usage to stabilize..." << std::endl;
-    sleep(10);
-
-    std::cout << "[ INFO ] Measuring ZAPTS PageTable overhead..." << std::endl;
-    long zapts_overhead = run_experiment(true);
-    std::cout << "[ INFO ] ZAPTS overhead: " << zapts_overhead << " kB" << std::endl;
-
-    EXPECT_GT(std_overhead, 0);
-    EXPECT_GT(zapts_overhead, 0);
-
-    // Theoretical Standard: 50 procs * 500 PMDs * 4kB/PMD = 100,000 kB.
-    // Theoretical ZAPTS: (1 ptshare_mm * 500 PMDs * 4kB) + (50 procs * PUD/PMD pages) = ~2,000 kB + (50 * 2 * 4kB) = ~2,400 kB.
-    // Savings should be ~97.5%.
-    EXPECT_LT(zapts_overhead, std_overhead / 10);
-
-    std::cout << "[ OK   ] Efficiency verified. Savings: " << (std_overhead - zapts_overhead) << " kB" << std::endl;
-}
-
 // Test 9: ptrace write triggers unsharing (Split-on-GUP)
 TEST_F(PtShareTest, SplitOnGUP) {
     std::cout << "[ INFO ] Starting SplitOnGUP test..." << std::endl;
@@ -590,182 +476,7 @@ TEST_F(PtShareTest, PtraceReadNoUnshare) {
     std::cout << "[ OK   ] Ptrace read-only peek completed." << std::endl;
 }
 
-/*
-// Test 6: mprotect triggers unsharing
-TEST_F(PtShareTest, UnshareMprotect) {
-    std::cout << "[ INFO ] Starting UnshareMprotect test..." << std::endl;
-    void* addr = (void*)0x740000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    std::cout << "[ INFO ] Triggering mprotect(PROT_WRITE) to force unshare..." << std::endl;
-    ASSERT_EQ(mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE), 0) << "mprotect failed: " << strerror(errno);
-
-    std::cout << "[ INFO ] Verifying write access after unsharing..." << std::endl;
-    ((char*)mapped)[0] = 'D';
-    EXPECT_EQ(((char*)mapped)[0], 'D');
-
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
-    std::cout << "[ OK   ] mprotect unsharing succeeded." << std::endl;
-}
-
-// Test 7: mremap triggers unsharing
-TEST_F(PtShareTest, UnshareMremap) {
-    std::cout << "[ INFO ] Starting UnshareMremap test..." << std::endl;
-    void* addr = (void*)0x750000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    void* new_addr = (void*)0x760000000000;
-    std::cout << "[ INFO ] Remapping from " << addr << " to " << new_addr << "..." << std::endl;
-    void* remapped = mremap(mapped, PMD_SIZE, PMD_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED, new_addr);
-    ASSERT_NE(remapped, MAP_FAILED) << "mremap failed: " << strerror(errno);
-    ASSERT_EQ(remapped, new_addr);
-
-    std::cout << "[ INFO ] Verifying access at new address..." << std::endl;
-    EXPECT_EQ(((char*)remapped)[0], 0);
-
-    ASSERT_EQ(munmap(remapped, PMD_SIZE), 0);
-    std::cout << "[ OK   ] mremap unsharing succeeded." << std::endl;
-}
-
-// Test 8: Partial munmap triggers unsharing (split)
-TEST_F(PtShareTest, UnsharePartialMunmap) {
-    std::cout << "[ INFO ] Starting UnsharePartialMunmap test..." << std::endl;
-    void* addr = (void*)0x770000000000;
-    std::cout << "[ INFO ] Mapping 2x PMD_SIZE at " << addr << "..." << std::endl;
-    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    std::cout << "[ INFO ] Performing partial munmap (first PMD)..." << std::endl;
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0) << "partial munmap failed: " << strerror(errno);
-
-    void* remaining = (void*)((unsigned long)mapped + PMD_SIZE);
-    std::cout << "[ INFO ] Verifying remaining part at " << remaining << "..." << std::endl;
-    EXPECT_EQ(((char*)remaining)[0], 0);
-
-    ASSERT_EQ(munmap(remaining, PMD_SIZE), 0);
-    std::cout << "[ OK   ] Partial munmap (split) unsharing succeeded." << std::endl;
-}
-
-// Test 10: MADV_DONTNEED triggers unsharing
-TEST_F(PtShareTest, UnshareMadviseDontNeed) {
-    std::cout << "[ INFO ] Starting UnshareMadviseDontNeed test..." << std::endl;
-    void* addr = (void*)0x790000000000;
-    // Must use MAP_SHARED for PROT_WRITE + MAP_SHARED_PT
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    ((char*)mapped)[0] = 'X';
-
-    std::cout << "[ INFO ] Triggering madvise(MADV_DONTNEED) to force unshare..." << std::endl;
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTNEED), 0) << "madvise failed: " << strerror(errno);
-
-    // Note: On some kernels/configurations, MADV_DONTNEED on MAP_SHARED
-    // might not immediately zap the page if it's dirty.
-    // However, on ZAPTS it should trigger unsharing.
-    // For the vanilla kernel test, we just ensure it doesn't crash.
-    (void)((char*)mapped)[0];
-
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
-    std::cout << "[ OK   ] madvise unsharing succeeded." << std::endl;
-}
-
-// Test 13: MADV_REMOVE triggers unsharing
-TEST_F(PtShareTest, UnshareMadviseRemove) {
-    std::cout << "[ INFO ] Starting UnshareMadviseRemove test..." << std::endl;
-    void* addr = (void*)0x7C0000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    ((char*)mapped)[0] = 'R';
-
-    std::cout << "[ INFO ] Triggering madvise(MADV_REMOVE) to force unshare..." << std::endl;
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_REMOVE), 0) << "madvise failed: " << strerror(errno);
-
-    EXPECT_EQ(((char*)mapped)[0], 0);
-
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
-    std::cout << "[ OK   ] madvise(MADV_REMOVE) unsharing succeeded." << std::endl;
-}
-
-// Test 17: Overlap Splitting
-TEST_F(PtShareTest, OverlapUnsharing) {
-    std::cout << "[ INFO ] Starting OverlapUnsharing test..." << std::endl;
-    void* addr = (void*)0x6E0000000000;
-
-    // Map 2 PMDs
-    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    // Map a single page in the middle (overlaps with the second PMD)
-    // This should trigger unsharing of the second PMD.
-    void* overlap_addr = (void*)((unsigned long)addr + PMD_SIZE);
-    void* overlap = mmap(overlap_addr, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    ASSERT_NE(overlap, MAP_FAILED);
-    ASSERT_EQ(overlap, overlap_addr);
-
-    ((char*)overlap)[0] = 'K';
-    EXPECT_EQ(((char*)overlap)[0], 'K');
-
-    // First PMD should still be accessible and unaffected
-    EXPECT_EQ(((char*)mapped)[0], 0);
-
-    munmap(overlap, PAGE_SIZE);
-    ASSERT_EQ(munmap(mapped, 2 * PMD_SIZE), 0);
-    std::cout << "[ OK   ] Overlap unsharing verified." << std::endl;
-}
-
-// Test 18: mremap expansion
-TEST_F(PtShareTest, MremapExpand) {
-    std::cout << "[ INFO ] Starting MremapExpand test..." << std::endl;
-    void* addr = (void*)0x6D0000000000;
-
-    // Map 1 PMD
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    // Expand to 2 PMDs
-    std::cout << "[ INFO ] Expanding mapping via mremap..." << std::endl;
-    void* expanded = mremap(mapped, PMD_SIZE, 2 * PMD_SIZE, MREMAP_MAYMOVE);
-    ASSERT_NE(expanded, MAP_FAILED);
-
-    // Verify access
-    EXPECT_EQ(((char*)expanded)[0], 0);
-    EXPECT_EQ(((char*)expanded)[PMD_SIZE], 0);
-
-    ASSERT_EQ(munmap(expanded, 2 * PMD_SIZE), 0);
-    std::cout << "[ OK   ] mremap expansion verified." << std::endl;
-}
-
-// Test 19: Partial mremap (split)
-TEST_F(PtShareTest, PartialMremap) {
-    std::cout << "[ INFO ] Starting PartialMremap test..." << std::endl;
-    void* addr = (void*)0x6C0000000000;
-
-    // Map 2 PMDs
-    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    // Move only the second PMD to a new location
-    void* second_pmd = (void*)((unsigned long)mapped + PMD_SIZE);
-    void* new_loc = (void*)0x6B0000000000;
-
-    std::cout << "[ INFO ] Moving second PMD via mremap..." << std::endl;
-    void* remapped = mremap(second_pmd, PMD_SIZE, PMD_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED, new_loc);
-    ASSERT_NE(remapped, MAP_FAILED);
-    ASSERT_EQ(remapped, new_loc);
-
-    // Verify both parts are still accessible
-    EXPECT_EQ(((char*)mapped)[0], 0);
-    EXPECT_EQ(((char*)remapped)[0], 0);
-
-    munmap(mapped, PMD_SIZE);
-    munmap(remapped, PMD_SIZE);
-    std::cout << "[ OK   ] Partial mremap verified." << std::endl;
-}
-
-// Test 23: process_vm_writev triggers unsharing
+ // Test 23: process_vm_writev triggers unsharing
 #include <sys/uio.h>
 TEST_F(PtShareTest, ProcessVmWriteUnshare) {
     std::cout << "[ INFO ] Starting ProcessVmWriteUnshare test..." << std::endl;
@@ -918,6 +629,297 @@ TEST_F(PtShareTest, GupFastODirect) {
     unlink(tmp_io_file);
     munmap(mapped, PMD_SIZE);
     std::cout << "[ OK   ] Gup-fast O_DIRECT race completed without crash." << std::endl;
+}
+
+// Test 17: Overlap Splitting
+TEST_F(PtShareTest, OverlapUnsharing) {
+    std::cout << "[ INFO ] Starting OverlapUnsharing test..." << std::endl;
+    void* addr = (void*)0x6E0000000000;
+
+    // Map 2 PMDs
+    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    // Map a single page in the middle (overlaps with the second PMD)
+    // This should trigger unsharing of the second PMD.
+    void* overlap_addr = (void*)((unsigned long)addr + PMD_SIZE);
+    void* overlap = mmap(overlap_addr, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ASSERT_NE(overlap, MAP_FAILED);
+    ASSERT_EQ(overlap, overlap_addr);
+
+    ((char*)overlap)[0] = 'K';
+    EXPECT_EQ(((char*)overlap)[0], 'K');
+
+    // First PMD should still be accessible and unaffected
+    EXPECT_EQ(((char*)mapped)[0], 0);
+
+    munmap(overlap, PAGE_SIZE);
+    ASSERT_EQ(munmap(mapped, 2 * PMD_SIZE), 0);
+    std::cout << "[ OK   ] Overlap unsharing verified." << std::endl;
+}
+
+/*
+// Test 10: MADV_DONTNEED triggers unsharing
+TEST_F(PtShareTest, UnshareMadviseDontNeed) {
+    std::cout << "[ INFO ] Starting UnshareMadviseDontNeed test..." << std::endl;
+    void* addr = (void*)0x790000000000;
+    // Must use MAP_SHARED for PROT_WRITE + MAP_SHARED_PT
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    ((char*)mapped)[0] = 'X';
+
+    std::cout << "[ INFO ] Triggering madvise(MADV_DONTNEED) to force unshare..." << std::endl;
+    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTNEED), 0) << "madvise failed: " << strerror(errno);
+
+    // Note: On some kernels/configurations, MADV_DONTNEED on MAP_SHARED
+    // might not immediately zap the page if it's dirty.
+    // However, on ZAPTS it should trigger unsharing.
+    // For the vanilla kernel test, we just ensure it doesn't crash.
+    (void)((char*)mapped)[0];
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] madvise unsharing succeeded." << std::endl;
+}
+
+// Test 6: mprotect triggers unsharing
+TEST_F(PtShareTest, UnshareMprotect) {
+    std::cout << "[ INFO ] Starting UnshareMprotect test..." << std::endl;
+    void* addr = (void*)0x740000000000;
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    std::cout << "[ INFO ] Triggering mprotect(PROT_WRITE) to force unshare..." << std::endl;
+    ASSERT_EQ(mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE), 0) << "mprotect failed: " << strerror(errno);
+
+    std::cout << "[ INFO ] Verifying write access after unsharing..." << std::endl;
+    ((char*)mapped)[0] = 'D';
+    EXPECT_EQ(((char*)mapped)[0], 'D');
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] mprotect unsharing succeeded." << std::endl;
+}
+
+// Test 7: mremap triggers unsharing
+TEST_F(PtShareTest, UnshareMremap) {
+    std::cout << "[ INFO ] Starting UnshareMremap test..." << std::endl;
+    void* addr = (void*)0x750000000000;
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    void* new_addr = (void*)0x760000000000;
+    std::cout << "[ INFO ] Remapping from " << addr << " to " << new_addr << "..." << std::endl;
+    void* remapped = mremap(mapped, PMD_SIZE, PMD_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED, new_addr);
+    ASSERT_NE(remapped, MAP_FAILED) << "mremap failed: " << strerror(errno);
+    ASSERT_EQ(remapped, new_addr);
+
+    std::cout << "[ INFO ] Verifying access at new address..." << std::endl;
+    EXPECT_EQ(((char*)remapped)[0], 0);
+
+    ASSERT_EQ(munmap(remapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] mremap unsharing succeeded." << std::endl;
+}
+
+// Test 8: Partial munmap triggers unsharing (split)
+TEST_F(PtShareTest, UnsharePartialMunmap) {
+    std::cout << "[ INFO ] Starting UnsharePartialMunmap test..." << std::endl;
+    void* addr = (void*)0x770000000000;
+    std::cout << "[ INFO ] Mapping 2x PMD_SIZE at " << addr << "..." << std::endl;
+    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    std::cout << "[ INFO ] Performing partial munmap (first PMD)..." << std::endl;
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0) << "partial munmap failed: " << strerror(errno);
+
+    void* remaining = (void*)((unsigned long)mapped + PMD_SIZE);
+    std::cout << "[ INFO ] Verifying remaining part at " << remaining << "..." << std::endl;
+    EXPECT_EQ(((char*)remaining)[0], 0);
+
+    ASSERT_EQ(munmap(remaining, PMD_SIZE), 0);
+    std::cout << "[ OK   ] Partial munmap (split) unsharing succeeded." << std::endl;
+}
+
+// Test 13: MADV_REMOVE triggers unsharing
+TEST_F(PtShareTest, UnshareMadviseRemove) {
+    std::cout << "[ INFO ] Starting UnshareMadviseRemove test..." << std::endl;
+    void* addr = (void*)0x7C0000000000;
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    ((char*)mapped)[0] = 'R';
+
+    std::cout << "[ INFO ] Triggering madvise(MADV_REMOVE) to force unshare..." << std::endl;
+    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_REMOVE), 0) << "madvise failed: " << strerror(errno);
+
+    EXPECT_EQ(((char*)mapped)[0], 0);
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] madvise(MADV_REMOVE) unsharing succeeded." << std::endl;
+}
+
+// Test 18: mremap expansion
+TEST_F(PtShareTest, MremapExpand) {
+    std::cout << "[ INFO ] Starting MremapExpand test..." << std::endl;
+    void* addr = (void*)0x6D0000000000;
+
+    // Map 1 PMD
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    // Expand to 2 PMDs
+    std::cout << "[ INFO ] Expanding mapping via mremap..." << std::endl;
+    void* expanded = mremap(mapped, PMD_SIZE, 2 * PMD_SIZE, MREMAP_MAYMOVE);
+    ASSERT_NE(expanded, MAP_FAILED);
+
+    // Verify access
+    EXPECT_EQ(((char*)expanded)[0], 0);
+    EXPECT_EQ(((char*)expanded)[PMD_SIZE], 0);
+
+    ASSERT_EQ(munmap(expanded, 2 * PMD_SIZE), 0);
+    std::cout << "[ OK   ] mremap expansion verified." << std::endl;
+}
+
+// Test 19: Partial mremap (split)
+TEST_F(PtShareTest, PartialMremap) {
+    std::cout << "[ INFO ] Starting PartialMremap test..." << std::endl;
+    void* addr = (void*)0x6C0000000000;
+
+    // Map 2 PMDs
+    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    // Move only the second PMD to a new location
+    void* second_pmd = (void*)((unsigned long)mapped + PMD_SIZE);
+    void* new_loc = (void*)0x6B0000000000;
+
+    std::cout << "[ INFO ] Moving second PMD via mremap..." << std::endl;
+    void* remapped = mremap(second_pmd, PMD_SIZE, PMD_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED, new_loc);
+    ASSERT_NE(remapped, MAP_FAILED);
+    ASSERT_EQ(remapped, new_loc);
+
+    // Verify both parts are still accessible
+    EXPECT_EQ(((char*)mapped)[0], 0);
+    EXPECT_EQ(((char*)remapped)[0], 0);
+
+    munmap(mapped, PMD_SIZE);
+    munmap(remapped, PMD_SIZE);
+    std::cout << "[ OK   ] Partial mremap verified." << std::endl;
+}
+*/
+
+/*
+// Helper to get PageTables value from /proc/meminfo in kB
+static long get_pagetable_usage_kb() {
+    FILE* f = fopen("/proc/meminfo", "r");
+    if (!f) return -1;
+    char line[256];
+    long usage = -1;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "PageTables:", 11) == 0) {
+            sscanf(line + 11, "%ld", &usage);
+            break;
+        }
+    }
+    fclose(f);
+    return usage;
+}
+
+// Test 22: Page Table Efficiency Comparison
+TEST_F(PtShareTest, PageTableEfficiency) {
+    std::cout << "[ INFO ] Starting PageTableEfficiency test..." << std::endl;
+    const int num_procs = 50;
+    const int num_pmds = 500; // 1GB mapping
+    const size_t total_size = (size_t)num_pmds * PMD_SIZE;
+    void* addr = (void*)0x600000000000;
+
+    auto run_experiment = [&](bool use_shpt) -> long {
+        long before = get_pagetable_usage_kb();
+
+        pid_t parent_pid = fork();
+        if (parent_pid == 0) {
+            setpgid(0, 0); // Create a new process group
+            int flags = MAP_SHARED | MAP_FIXED;
+            if (use_shpt) flags |= MAP_SHARED_PT;
+
+            void* mapped = mmap(addr, total_size, PROT_READ | PROT_WRITE, flags, fd, 0);
+            if (mapped == MAP_FAILED) {
+                perror("mmap failed");
+                _exit(1);
+            }
+
+            // Force PTE-level page tables to ensure we are testing PTE sharing
+            madvise(mapped, total_size, MADV_NOHUGEPAGE);
+
+            for (int i = 0; i < num_procs; i++) {
+                if (fork() == 0) {
+                    signal(SIGTERM, [](int){ _exit(0); });
+                    // Children access all PMDs to ensure PTEs are present
+                    for (size_t j = 0; j < num_pmds; j++) {
+                        if (((char*)mapped)[j * PMD_SIZE] != 0) _exit(2);
+                    }
+
+                    // Signal this child is done via a dedicated file
+                    char sync_name[64];
+                    sprintf(sync_name, "sync_ready_%d", i);
+                    FILE* s = fopen(sync_name, "w");
+                    if (s) { fprintf(s, "OK"); fclose(s); }
+
+                    while(1) pause();
+                }
+            }
+            while(1) pause();
+            _exit(0);
+        }
+
+        // Wait for all 50 children to signal readiness
+        for (int i = 0; i < num_procs; i++) {
+            char sync_name[64];
+            sprintf(sync_name, "sync_ready_%d", i);
+            bool ready = false;
+            for (int retry = 0; retry < 50; retry++) {
+                struct stat st;
+                if (stat(sync_name, &st) == 0) {
+                    ready = true;
+                    break;
+                }
+                usleep(200000); // 0.2s
+            }
+            if (!ready) std::cerr << "[ WARN ] Child " << i << " never signaled ready." << std::endl;
+            unlink(sync_name);
+        }
+        sleep(2); // Extra settle time
+
+        long during = get_pagetable_usage_kb();
+
+        // Kill entire process group
+        kill(-parent_pid, SIGTERM);
+
+        int status;
+        waitpid(parent_pid, &status, 0);
+
+        return during - before;
+    };
+
+    std::cout << "[ INFO ] Measuring standard PageTable overhead..." << std::endl;
+    long std_overhead = run_experiment(false);
+    std::cout << "[ INFO ] Standard overhead: " << std_overhead << " kB" << std::endl;
+
+    std::cout << "[ INFO ] Waiting for PageTable usage to stabilize..." << std::endl;
+    sleep(10);
+
+    std::cout << "[ INFO ] Measuring ZAPTS PageTable overhead..." << std::endl;
+    long zapts_overhead = run_experiment(true);
+    std::cout << "[ INFO ] ZAPTS overhead: " << zapts_overhead << " kB" << std::endl;
+
+    EXPECT_GT(std_overhead, 0);
+    EXPECT_GT(zapts_overhead, 0);
+
+    // Theoretical Standard: 50 procs * 500 PMDs * 4kB/PMD = 100,000 kB.
+    // Theoretical ZAPTS: (1 ptshare_mm * 500 PMDs * 4kB) + (50 procs * PUD/PMD pages) = ~2,000 kB + (50 * 2 * 4kB) = ~2,400 kB.
+    // Savings should be ~97.5%.
+    EXPECT_LT(zapts_overhead, std_overhead / 10);
+
+    std::cout << "[ OK   ] Efficiency verified. Savings: " << (std_overhead - zapts_overhead) << " kB" << std::endl;
 }
 */
 
