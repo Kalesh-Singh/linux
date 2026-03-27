@@ -695,30 +695,6 @@ TEST_F(PtShareTest, UnshareMprotect) {
     std::cout << "[ OK   ] mprotect unsharing succeeded." << std::endl;
 }
 
-/*
-// Test 10: MADV_DONTNEED triggers unsharing
-TEST_F(PtShareTest, UnshareMadviseDontNeed) {
-    std::cout << "[ INFO ] Starting UnshareMadviseDontNeed test..." << std::endl;
-    void* addr = (void*)0x790000000000;
-    // Must use MAP_SHARED for PROT_WRITE + MAP_SHARED_PT
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    ((char*)mapped)[0] = 'X';
-
-    std::cout << "[ INFO ] Triggering madvise(MADV_DONTNEED) to force unshare..." << std::endl;
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTNEED), 0) << "madvise failed: " << strerror(errno);
-
-    // Note: On some kernels/configurations, MADV_DONTNEED on MAP_SHARED
-    // might not immediately zap the page if it's dirty.
-    // However, on ZAPTS it should trigger unsharing.
-    // For the vanilla kernel test, we just ensure it doesn't crash.
-    (void)((char*)mapped)[0];
-
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
-    std::cout << "[ OK   ] madvise unsharing succeeded." << std::endl;
-}
-
 // Test 7: mremap triggers unsharing
 TEST_F(PtShareTest, UnshareMremap) {
     std::cout << "[ INFO ] Starting UnshareMremap test..." << std::endl;
@@ -737,25 +713,6 @@ TEST_F(PtShareTest, UnshareMremap) {
 
     ASSERT_EQ(munmap(remapped, PMD_SIZE), 0);
     std::cout << "[ OK   ] mremap unsharing succeeded." << std::endl;
-}
-
-
-// Test 13: MADV_REMOVE triggers unsharing
-TEST_F(PtShareTest, UnshareMadviseRemove) {
-    std::cout << "[ INFO ] Starting UnshareMadviseRemove test..." << std::endl;
-    void* addr = (void*)0x7C0000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    ((char*)mapped)[0] = 'R';
-
-    std::cout << "[ INFO ] Triggering madvise(MADV_REMOVE) to force unshare..." << std::endl;
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_REMOVE), 0) << "madvise failed: " << strerror(errno);
-
-    EXPECT_EQ(((char*)mapped)[0], 0);
-
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
-    std::cout << "[ OK   ] madvise(MADV_REMOVE) unsharing succeeded." << std::endl;
 }
 
 // Test 18: mremap expansion
@@ -806,6 +763,51 @@ TEST_F(PtShareTest, PartialMremap) {
     munmap(remapped, PMD_SIZE);
     std::cout << "[ OK   ] Partial mremap verified." << std::endl;
 }
+
+/*
+// Test 10: MADV_DONTNEED triggers unsharing
+TEST_F(PtShareTest, UnshareMadviseDontNeed) {
+    std::cout << "[ INFO ] Starting UnshareMadviseDontNeed test..." << std::endl;
+    void* addr = (void*)0x790000000000;
+    // Must use MAP_SHARED for PROT_WRITE + MAP_SHARED_PT
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    ((char*)mapped)[0] = 'X';
+
+    std::cout << "[ INFO ] Triggering madvise(MADV_DONTNEED) to force unshare..." << std::endl;
+    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTNEED), 0) << "madvise failed: " << strerror(errno);
+
+    // Note: On some kernels/configurations, MADV_DONTNEED on MAP_SHARED
+    // might not immediately zap the page if it's dirty.
+    // However, on ZAPTS it should trigger unsharing.
+    // For the vanilla kernel test, we just ensure it doesn't crash.
+    (void)((char*)mapped)[0];
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] madvise unsharing succeeded." << std::endl;
+}
+
+
+
+// Test 13: MADV_REMOVE triggers unsharing
+TEST_F(PtShareTest, UnshareMadviseRemove) {
+    std::cout << "[ INFO ] Starting UnshareMadviseRemove test..." << std::endl;
+    void* addr = (void*)0x7C0000000000;
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    ((char*)mapped)[0] = 'R';
+
+    std::cout << "[ INFO ] Triggering madvise(MADV_REMOVE) to force unshare..." << std::endl;
+    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_REMOVE), 0) << "madvise failed: " << strerror(errno);
+
+    EXPECT_EQ(((char*)mapped)[0], 0);
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] madvise(MADV_REMOVE) unsharing succeeded." << std::endl;
+}
+
 */
 
 /*
