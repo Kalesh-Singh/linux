@@ -165,7 +165,7 @@ void ptshare_put_vma(struct vm_area_struct *vma)
 }
 
 /**
- * ptshare_unshare_vma_on_gup - Fully sever a VMA from ptshare infrastructure.
+ * ptshare_unshare_vma_locked - Fully sever a VMA from ptshare infrastructure.
  * @vma: The guest VMA.
  * @locked: indicates whether the mmap read lock is already held (from GUP).
  *
@@ -174,36 +174,20 @@ void ptshare_put_vma(struct vm_area_struct *vma)
  * and increments the page reference and mapcounts so the new private mapping
  * is correctly tracked by rmap.
  *
- * Context: Called from __get_user_pages() when FOLL_WRITE is requested on a
- * shared VMA. It handles the transition from mmap_read_lock to mmap_write_lock.
+ * Context: Caller MUST hold the mmap_write_lock on vma->vm_mm.
  *
  * Return: 0 on success, or -errno. If successful, the VMA is no longer shared.
  */
-int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma, int locked)
+int ptshare_unshare_vma_locked(struct vm_area_struct *vma)
 {
 	struct mm_struct *mm = vma->vm_mm;
 	unsigned long addr;
 	int ret = 0;
 
+	mmap_assert_write_locked(mm);
+
 	if (!vma_shares_pagetables(vma))
 		return 0;
-
-	/*
-	 * We must be in a write-locked context to modify vma->vm_flags and
-	 * safely manipulate page table structures.
-	 *
-	 * Upgrade from read lock if necessary.
-	 */
-	if (locked)
-		mmap_read_unlock(mm);
-
-	ret = mmap_write_lock_killable(mm);
-	if (ret)
-		goto out;
-
-	/* Re-verify under write lock */
-	if (!vma_shares_pagetables(vma))
-		goto out_unlock;
 
 	for (addr = vma->vm_start; addr < vma->vm_end; addr += PMD_SIZE) {
 		pgd_t *pgd;
@@ -236,7 +220,7 @@ int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma, int locked)
 		new_ptdesc = page_ptdesc(pte_alloc_one(mm));
 		if (!new_ptdesc) {
 			ret = -ENOMEM;
-			goto out_unlock;
+			return ret;
 		}
 
 		ptl = pmd_lock(mm, pmd);
@@ -306,13 +290,43 @@ int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma, int locked)
 	/* Drop the reference to the manager's shadow VMA */
 	ptshare_put_vma(vma);
 
-out_unlock:
-	mmap_write_unlock(mm);
+	return 0;
+}
 
+/**
+ * ptshare_unshare_vma - Sever a VMA from shared page tables (handles GUP lock upgrade).
+ * @vma: The guest VMA.
+ * @mmap_locked: Pointer to the mmap_lock status (from GUP).
+ *
+ * Context: Called from __get_user_pages() when FOLL_WRITE is requested on a
+ * shared VMA. It handles the transition from mmap_read_lock to mmap_write_lock.
+ *
+ * Return: 0 on success, or -errno.
+ */
+int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma, int mmap_locked)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	int ret = 0;
+
+	if (!vma_shares_pagetables(vma))
+		return 0;
+
+	if (mmap_locked)
+		mmap_read_unlock(mm);
+
+	ret = mmap_write_lock_killable(mm);
+	if (ret)
+		goto out;
+
+	mmap_assert_write_locked(mm);
+
+	ret = ptshare_unshare_vma_locked(vma);
+
+	mmap_write_unlock(mm);
 out:
 	/* Restore the read lock for the caller */
-	if (locked)
+	if (mmap_locked)
 		mmap_read_lock(mm);
 
 	return ret;
-}
+ }
