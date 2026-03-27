@@ -764,7 +764,6 @@ TEST_F(PtShareTest, PartialMremap) {
     std::cout << "[ OK   ] Partial mremap verified." << std::endl;
 }
 
-/*
 // Test 10: MADV_DONTNEED triggers unsharing
 TEST_F(PtShareTest, UnshareMadviseDontNeed) {
     std::cout << "[ INFO ] Starting UnshareMadviseDontNeed test..." << std::endl;
@@ -788,8 +787,6 @@ TEST_F(PtShareTest, UnshareMadviseDontNeed) {
     std::cout << "[ OK   ] madvise unsharing succeeded." << std::endl;
 }
 
-
-
 // Test 13: MADV_REMOVE triggers unsharing
 TEST_F(PtShareTest, UnshareMadviseRemove) {
     std::cout << "[ INFO ] Starting UnshareMadviseRemove test..." << std::endl;
@@ -807,8 +804,6 @@ TEST_F(PtShareTest, UnshareMadviseRemove) {
     ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
     std::cout << "[ OK   ] madvise(MADV_REMOVE) unsharing succeeded." << std::endl;
 }
-
-*/
 
 /*
 // Helper to get PageTables value from /proc/meminfo in kB
