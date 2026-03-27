@@ -677,6 +677,24 @@ TEST_F(PtShareTest, UnsharePartialMunmap) {
     std::cout << "[ OK   ] Partial munmap (split) unsharing succeeded." << std::endl;
 }
 
+// Test 6: mprotect triggers unsharing
+TEST_F(PtShareTest, UnshareMprotect) {
+    std::cout << "[ INFO ] Starting UnshareMprotect test..." << std::endl;
+    void* addr = (void*)0x740000000000;
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    std::cout << "[ INFO ] Triggering mprotect(PROT_WRITE) to force unshare..." << std::endl;
+    ASSERT_EQ(mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE), 0) << "mprotect failed: " << strerror(errno);
+
+    std::cout << "[ INFO ] Verifying write access after unsharing..." << std::endl;
+    ((char*)mapped)[0] = 'D';
+    EXPECT_EQ(((char*)mapped)[0], 'D');
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] mprotect unsharing succeeded." << std::endl;
+}
+
 /*
 // Test 10: MADV_DONTNEED triggers unsharing
 TEST_F(PtShareTest, UnshareMadviseDontNeed) {
@@ -699,24 +717,6 @@ TEST_F(PtShareTest, UnshareMadviseDontNeed) {
 
     ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
     std::cout << "[ OK   ] madvise unsharing succeeded." << std::endl;
-}
-
-// Test 6: mprotect triggers unsharing
-TEST_F(PtShareTest, UnshareMprotect) {
-    std::cout << "[ INFO ] Starting UnshareMprotect test..." << std::endl;
-    void* addr = (void*)0x740000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    std::cout << "[ INFO ] Triggering mprotect(PROT_WRITE) to force unshare..." << std::endl;
-    ASSERT_EQ(mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE), 0) << "mprotect failed: " << strerror(errno);
-
-    std::cout << "[ INFO ] Verifying write access after unsharing..." << std::endl;
-    ((char*)mapped)[0] = 'D';
-    EXPECT_EQ(((char*)mapped)[0], 'D');
-
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
-    std::cout << "[ OK   ] mprotect unsharing succeeded." << std::endl;
 }
 
 // Test 7: mremap triggers unsharing
