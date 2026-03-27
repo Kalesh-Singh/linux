@@ -102,7 +102,9 @@ bool ptshare_free_pte_range(pgtable_t ptdesc);
 
 vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf);
 
-int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma, int locked);
+int ptshare_unshare_vma_locked(struct vm_area_struct *vma);
+
+int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma, int mmap_locked);
 #else /* !CONFIG_PTSHARE */
 static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
 {
@@ -171,8 +173,13 @@ static inline vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf)
 	return VM_FAULT_SIGBUS;
 }
 
+static inline int ptshare_unshare_vma_locked(struct vm_area_struct *vma)
+{
+	return 0;
+}
+
 static inline int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma,
-						int locked)
+						int mmap_locked)
 {
 	return 0;
 }
