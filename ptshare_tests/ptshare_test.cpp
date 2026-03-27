@@ -805,6 +805,92 @@ TEST_F(PtShareTest, UnshareMadviseRemove) {
     std::cout << "[ OK   ] madvise(MADV_REMOVE) unsharing succeeded." << std::endl;
 }
 
+// Test 26: MADV_DONTNEED isolation (Process B should not be affected by Process A's madvise)
+TEST_F(PtShareTest, MadviseDontNeedIsolation) {
+    std::cout << "[ INFO ] Starting MadviseDontNeedIsolation test..." << std::endl;
+    void* addr = (void*)0x630000000000;
+    // Map in parent and populate
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+    ((char*)mapped)[0] = 'X';
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child (Process B): verify initial value
+        if (((char*)mapped)[0] != 'X') exit(1);
+
+        // Synchronize: wait for parent to madvise
+        sleep(2);
+
+        // Verify value is still 'X' (Process B should be isolated)
+        if (((char*)mapped)[0] != 'X') {
+            std::cerr << "Child saw corrupted data after parent's madvise!" << std::endl;
+            exit(2);
+        }
+        exit(0);
+    }
+
+    // Parent (Process A): Wait a bit for child to start
+    sleep(1);
+
+    // Parent: madvise DONTNEED
+    std::cout << "[ INFO ] Parent triggering madvise(MADV_DONTNEED)..." << std::endl;
+    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTNEED), 0);
+
+    // Parent: verify its own data is gone (should be 0)
+    EXPECT_EQ(((char*)mapped)[0], 0);
+
+    int status;
+    waitpid(pid, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] Madvise isolation verified." << std::endl;
+}
+
+// Test 27: MADV_REMOVE isolation
+TEST_F(PtShareTest, MadviseRemoveIsolation) {
+    std::cout << "[ INFO ] Starting MadviseRemoveIsolation test..." << std::endl;
+    void* addr = (void*)0x620000000000;
+    // Map in parent and populate
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+    ((char*)mapped)[0] = 'R';
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child (Process B): verify initial value
+        if (((char*)mapped)[0] != 'R') exit(1);
+
+        // Synchronize: wait for parent to madvise
+        sleep(2);
+
+        // Verify value is still 'R' (Process B should be isolated)
+        if (((char*)mapped)[0] != 'R') {
+            std::cerr << "Child saw corrupted data after parent's madvise!" << std::endl;
+            exit(2);
+        }
+        exit(0);
+    }
+
+    // Parent (Process A): Wait a bit for child to start
+    sleep(1);
+
+    // Parent: madvise REMOVE
+    std::cout << "[ INFO ] Parent triggering madvise(MADV_REMOVE)..." << std::endl;
+    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_REMOVE), 0);
+
+    // Parent: verify its own data is gone (should be 0)
+    EXPECT_EQ(((char*)mapped)[0], 0);
+
+    int status;
+    waitpid(pid, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    std::cout << "[ OK   ] Madvise(MADV_REMOVE) isolation verified." << std::endl;
+}
+
 /*
 // Helper to get PageTables value from /proc/meminfo in kB
 static long get_pagetable_usage_kb() {
