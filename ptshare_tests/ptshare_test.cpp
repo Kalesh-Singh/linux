@@ -658,6 +658,25 @@ TEST_F(PtShareTest, OverlapUnsharing) {
     std::cout << "[ OK   ] Overlap unsharing verified." << std::endl;
 }
 
+// Test 8: Partial munmap triggers unsharing (split)
+TEST_F(PtShareTest, UnsharePartialMunmap) {
+    std::cout << "[ INFO ] Starting UnsharePartialMunmap test..." << std::endl;
+    void* addr = (void*)0x770000000000;
+    std::cout << "[ INFO ] Mapping 2x PMD_SIZE at " << addr << "..." << std::endl;
+    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    std::cout << "[ INFO ] Performing partial munmap (first PMD)..." << std::endl;
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0) << "partial munmap failed: " << strerror(errno);
+
+    void* remaining = (void*)((unsigned long)mapped + PMD_SIZE);
+    std::cout << "[ INFO ] Verifying remaining part at " << remaining << "..." << std::endl;
+    EXPECT_EQ(((char*)remaining)[0], 0);
+
+    ASSERT_EQ(munmap(remaining, PMD_SIZE), 0);
+    std::cout << "[ OK   ] Partial munmap (split) unsharing succeeded." << std::endl;
+}
+
 /*
 // Test 10: MADV_DONTNEED triggers unsharing
 TEST_F(PtShareTest, UnshareMadviseDontNeed) {
@@ -720,24 +739,6 @@ TEST_F(PtShareTest, UnshareMremap) {
     std::cout << "[ OK   ] mremap unsharing succeeded." << std::endl;
 }
 
-// Test 8: Partial munmap triggers unsharing (split)
-TEST_F(PtShareTest, UnsharePartialMunmap) {
-    std::cout << "[ INFO ] Starting UnsharePartialMunmap test..." << std::endl;
-    void* addr = (void*)0x770000000000;
-    std::cout << "[ INFO ] Mapping 2x PMD_SIZE at " << addr << "..." << std::endl;
-    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
-
-    std::cout << "[ INFO ] Performing partial munmap (first PMD)..." << std::endl;
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0) << "partial munmap failed: " << strerror(errno);
-
-    void* remaining = (void*)((unsigned long)mapped + PMD_SIZE);
-    std::cout << "[ INFO ] Verifying remaining part at " << remaining << "..." << std::endl;
-    EXPECT_EQ(((char*)remaining)[0], 0);
-
-    ASSERT_EQ(munmap(remaining, PMD_SIZE), 0);
-    std::cout << "[ OK   ] Partial munmap (split) unsharing succeeded." << std::endl;
-}
 
 // Test 13: MADV_REMOVE triggers unsharing
 TEST_F(PtShareTest, UnshareMadviseRemove) {
