@@ -22,6 +22,7 @@
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/mmu_notifier.h>
+#include <linux/ptshare.h>
 #include <linux/uaccess.h>
 #include <linux/userfaultfd_k.h>
 #include <linux/mempolicy.h>
@@ -1658,6 +1659,12 @@ static int check_prep_vma(struct vma_remap_struct *vrm)
 	if (!vma)
 		return -EFAULT;
 
+	if (unlikely(vma_shares_pagetables(vma))) {
+		int err = ptshare_unshare_vma_locked(vma);
+		if (err)
+			return err;
+	}
+
 	/* If mseal()'d, mremap() is prohibited. */
 	if (vma_is_sealed(vma))
 		return -EPERM;
@@ -1870,6 +1877,12 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 		vrm->addr = addr;
 		vrm->new_addr = target_addr + offset;
 		vrm->old_len = vrm->new_len = len;
+
+		if (unlikely(vma_shares_pagetables(vma))) {
+			res = ptshare_unshare_vma_locked(vma);
+			if (res)
+				return res;
+		}
 
 		multi_allowed = vma_multi_allowed(vma);
 		if (!multi_allowed) {
