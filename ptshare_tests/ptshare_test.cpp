@@ -823,6 +823,8 @@ TEST_F(PtShareTest, MadviseDontNeedIsolation) {
         sleep(2);
 
         // Verify value is still 'X' (Process B should be isolated)
+        // Since it's MAP_SHARED, it will see 'X' either from its intact
+        // PTEs or by faulting it back from the page cache.
         if (((char*)mapped)[0] != 'X') {
             std::cerr << "Child saw corrupted data after parent's madvise!" << std::endl;
             exit(2);
@@ -833,12 +835,13 @@ TEST_F(PtShareTest, MadviseDontNeedIsolation) {
     // Parent (Process A): Wait a bit for child to start
     sleep(1);
 
-    // Parent: madvise DONTNEED
+    // Parent: madvise DONTNEED. This triggers unsharing.
     std::cout << "[ INFO ] Parent triggering madvise(MADV_DONTNEED)..." << std::endl;
     ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTNEED), 0);
 
-    // Parent: verify its own data is gone (should be 0)
-    EXPECT_EQ(((char*)mapped)[0], 0);
+    // Parent: verify it can still see its data. Since it's MAP_SHARED,
+    // MADV_DONTNEED zaps PTEs but not the page cache. refault should see 'X'.
+    EXPECT_EQ(((char*)mapped)[0], 'X');
 
     int status;
     waitpid(pid, &status, 0);
@@ -848,7 +851,7 @@ TEST_F(PtShareTest, MadviseDontNeedIsolation) {
     std::cout << "[ OK   ] Madvise isolation verified." << std::endl;
 }
 
-// Test 27: MADV_REMOVE isolation
+// Test 27: MADV_REMOVE global effect (Process B SHOULD be affected by Process A's madvise)
 TEST_F(PtShareTest, MadviseRemoveIsolation) {
     std::cout << "[ INFO ] Starting MadviseRemoveIsolation test..." << std::endl;
     void* addr = (void*)0x620000000000;
@@ -865,9 +868,10 @@ TEST_F(PtShareTest, MadviseRemoveIsolation) {
         // Synchronize: wait for parent to madvise
         sleep(2);
 
-        // Verify value is still 'R' (Process B should be isolated)
-        if (((char*)mapped)[0] != 'R') {
-            std::cerr << "Child saw corrupted data after parent's madvise!" << std::endl;
+        // Verify value is 0 (Process B should see the hole punch)
+        // MADV_REMOVE is a hole punch on the file, so all processes must see 0.
+        if (((char*)mapped)[0] != 0) {
+            std::cerr << "Child did NOT see the hole punched by parent!" << std::endl;
             exit(2);
         }
         exit(0);
@@ -876,7 +880,7 @@ TEST_F(PtShareTest, MadviseRemoveIsolation) {
     // Parent (Process A): Wait a bit for child to start
     sleep(1);
 
-    // Parent: madvise REMOVE
+    // Parent: madvise REMOVE. This triggers unsharing.
     std::cout << "[ INFO ] Parent triggering madvise(MADV_REMOVE)..." << std::endl;
     ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_REMOVE), 0);
 
@@ -888,7 +892,7 @@ TEST_F(PtShareTest, MadviseRemoveIsolation) {
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
     ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
-    std::cout << "[ OK   ] Madvise(MADV_REMOVE) isolation verified." << std::endl;
+    std::cout << "[ OK   ] Madvise(MADV_REMOVE) global effect verified." << std::endl;
 }
 
 /*
