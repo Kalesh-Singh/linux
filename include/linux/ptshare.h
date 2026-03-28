@@ -10,6 +10,7 @@ extern struct mm_struct *ptshare_mm;
 struct ptshare_desc {
 	struct mm_struct *ptshare_mm;		/* The headless shadow MM for this domain */
 	struct mmu_notifier mmu_notifier;	/* Notifier for TLB consistency */
+	refcount_t refcount;			/* Refcount for the descriptor itself */
 };
 
 static inline bool has_map_hugetlb_flag(unsigned long flags)
