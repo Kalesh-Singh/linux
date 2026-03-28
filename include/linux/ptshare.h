@@ -4,8 +4,13 @@
 #include <linux/mm_types.h>
 #include <linux/mman.h>
 #include <linux/mm.h>
+#include <linux/mmu_notifier.h>
 
 extern struct mm_struct *ptshare_mm;
+struct ptshare_desc {
+	struct mm_struct *ptshare_mm;		/* The headless shadow MM for this domain */
+	struct mmu_notifier mmu_notifier;	/* Notifier for TLB consistency */
+};
 
 static inline bool has_map_hugetlb_flag(unsigned long flags)
 {
