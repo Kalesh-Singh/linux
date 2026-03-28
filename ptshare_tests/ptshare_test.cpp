@@ -923,6 +923,34 @@ TEST_F(PtShareTest, GuardInstallSharedPTFailure) {
     ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
 }
 
+#ifndef MADV_GUARD_REMOVE
+#define MADV_GUARD_REMOVE 103
+#endif
+
+// Test 29: MADV_GUARD_REMOVE failure on shared page table VMAs
+TEST_F(PtShareTest, GuardRemoveSharedPTFailure) {
+    std::cout << "[ INFO ] Starting GuardRemoveSharedPTFailure test..." << std::endl;
+    void* addr = (void*)0x605000000000;
+    // Map with MAP_SHARED_PT
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    std::cout << "[ INFO ] Attempting MADV_GUARD_REMOVE on shared PT VMA..." << std::endl;
+    int ret = madvise(mapped, PAGE_SIZE, MADV_GUARD_REMOVE);
+
+    // Expecting failure with EINVAL because shared PT VMAs are restricted
+    EXPECT_EQ(ret, -1);
+    EXPECT_EQ(errno, EINVAL);
+
+    if (ret == -1 && errno == EINVAL) {
+        std::cout << "[ OK   ] MADV_GUARD_REMOVE correctly failed with EINVAL on shared PT VMA." << std::endl;
+    } else {
+        std::cerr << "[ FAIL ] MADV_GUARD_REMOVE did not fail as expected. ret=" << ret << " errno=" << errno << std::endl;
+    }
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+}
+
 /*
 // Helper to get PageTables value from /proc/meminfo in kB
 static long get_pagetable_usage_kb() {
