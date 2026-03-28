@@ -895,6 +895,34 @@ TEST_F(PtShareTest, MadviseRemoveIsolation) {
     std::cout << "[ OK   ] Madvise(MADV_REMOVE) global effect verified." << std::endl;
 }
 
+#ifndef MADV_GUARD_INSTALL
+#define MADV_GUARD_INSTALL 102
+#endif
+
+// Test 28: MADV_GUARD_INSTALL failure on shared page table VMAs
+TEST_F(PtShareTest, GuardInstallSharedPTFailure) {
+    std::cout << "[ INFO ] Starting GuardInstallSharedPTFailure test..." << std::endl;
+    void* addr = (void*)0x610000000000;
+    // Map with MAP_SHARED_PT
+    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    std::cout << "[ INFO ] Attempting MADV_GUARD_INSTALL on shared PT VMA..." << std::endl;
+    int ret = madvise(mapped, PAGE_SIZE, MADV_GUARD_INSTALL);
+
+    // Expecting failure with EINVAL because shared PT VMAs are restricted
+    EXPECT_EQ(ret, -1);
+    EXPECT_EQ(errno, EINVAL);
+
+    if (ret == -1 && errno == EINVAL) {
+        std::cout << "[ OK   ] MADV_GUARD_INSTALL correctly failed with EINVAL on shared PT VMA." << std::endl;
+    } else {
+        std::cerr << "[ FAIL ] MADV_GUARD_INSTALL did not fail as expected. ret=" << ret << " errno=" << errno << std::endl;
+    }
+
+    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+}
+
 /*
 // Helper to get PageTables value from /proc/meminfo in kB
 static long get_pagetable_usage_kb() {
