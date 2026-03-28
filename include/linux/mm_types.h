@@ -33,6 +33,9 @@
 struct address_space;
 struct futex_private_hash;
 struct mem_cgroup;
+#ifdef CONFIG_PTSHARE
+struct ptshare_desc;
+#endif
 
 typedef struct {
 	unsigned long f;
@@ -1151,6 +1154,9 @@ struct mm_struct {
 		struct file __rcu *exe_file;
 #ifdef CONFIG_MMU_NOTIFIER
 		struct mmu_notifier_subscriptions *notifier_subscriptions;
+#endif
+#ifdef CONFIG_PTSHARE
+		struct ptshare_desc *ptshare_desc;
 #endif
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE) && !defined(CONFIG_SPLIT_PMD_PTLOCKS)
 		pgtable_t pmd_huge_pte; /* protected by page_table_lock */
