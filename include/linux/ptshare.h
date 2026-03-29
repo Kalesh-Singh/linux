@@ -6,7 +6,6 @@
 #include <linux/mm.h>
 #include <linux/mmu_notifier.h>
 
-extern struct mm_struct *ptshare_mm;
 struct ptshare_desc {
 	struct mm_struct *ptshare_mm;		/* The headless shadow MM for this domain */
 	struct mmu_notifier mmu_notifier;	/* Notifier for TLB consistency */
@@ -85,6 +84,9 @@ unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr);
 vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf);
 bool ptshare_vma_skip_zap_pte_range(struct vm_area_struct *vma);
 bool ptshare_free_pte_range(struct mm_struct *mm, pgtable_t token);
+
+struct ptshare_desc *ptshare_alloc_desc(void);
+void ptshare_put_desc(struct ptshare_desc *desc);
 #else /* !CONFIG_PTSHARE */
 static inline int ptshare_validate_mmap(struct file *file, unsigned long addr,
 					unsigned long len, unsigned long prot,
@@ -113,6 +115,15 @@ static inline bool ptshare_vma_skip_zap_pte_range(struct vm_area_struct *vma)
 static inline bool ptshare_free_pte_range(struct mm_struct *mm, pgtable_t token)
 {
 	return false;
+}
+
+static inline struct ptshare_desc *ptshare_alloc_desc(void)
+{
+	return NULL;
+}
+
+static inline void ptshare_put_desc(struct ptshare_desc *desc)
+{
 }
 #endif /* CONFIG_PTSHARE */
 #endif /* _LINUX_PTSHARE_H */

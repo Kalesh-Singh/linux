@@ -24,7 +24,113 @@
 
 #include "internal.h"
 
-struct mm_struct *ptshare_mm;
+#ifdef CONFIG_X86
+static void ptshare_x86_flush_tlb_range_ipi(void *data)
+{
+	count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
+
+	/*
+	 * If INVPCID is available, use it to flush all non-global
+	 * mappings across all PCIDs. This avoids unnecessary
+	 * flushing of kernel (global) mappings.
+	 */
+	if (static_cpu_has(X86_FEATURE_INVPCID)) {
+		invpcid_flush_all_nonglobals();
+	} else {
+		/* Fallback to flushing everything if INVPCID is not supported */
+		__flush_tlb_all();
+	}
+}
+#else
+static void ptshare_x86_flush_tlb_range_ipi(void *data)
+{
+}
+#endif
+
+#ifdef CONFIG_ARM64
+static void ptshare_arm64_flush_tlb_range(const struct mmu_notifier_range *range)
+{
+	unsigned long start = range->start;
+	unsigned long end = range->end;
+	unsigned long stride = PAGE_SIZE;
+	unsigned long pages;
+
+	start = round_down(start, stride);
+	end = round_up(end, stride);
+	pages = (end - start) >> PAGE_SHIFT;
+
+	if (__flush_tlb_range_limit_excess(start, end, pages, stride)) {
+		flush_tlb_all();
+		return;
+	}
+
+	dsb(ishst);
+	__flush_tlb_range_op(vaae1is, start, pages, stride, 0,
+			     TLBI_TTL_UNKNOWN, false, lpa2_is_enabled());
+	__tlbi_sync_s1ish();
+	isb();
+}
+#else
+static void ptshare_arm64_flush_tlb_range(const struct mmu_notifier_range *range)
+{
+}
+#endif
+
+static int ptshare_invalidate_range_start(struct mmu_notifier *mn,
+				       const struct mmu_notifier_range *range)
+{
+	return 0;
+}
+
+static void ptshare_invalidate_range_end(struct mmu_notifier *mn,
+				       const struct mmu_notifier_range *range)
+{
+	if (IS_ENABLED(CONFIG_X86))
+		on_each_cpu(ptshare_x86_flush_tlb_range_ipi, (void *)range, 1);
+	else if (IS_ENABLED(CONFIG_ARM64))
+		ptshare_arm64_flush_tlb_range(range);
+}
+
+static const struct mmu_notifier_ops ptshare_mmu_notifier_ops = {
+	.invalidate_range_start = ptshare_invalidate_range_start,
+	.invalidate_range_end = ptshare_invalidate_range_end,
+};
+
+struct ptshare_desc *ptshare_alloc_desc(void)
+{
+	struct ptshare_desc *desc;
+
+	desc = kzalloc(sizeof(*desc), GFP_KERNEL);
+	if (!desc)
+		return NULL;
+
+	desc->ptshare_mm = mm_alloc();
+	if (!desc->ptshare_mm) {
+		kfree(desc);
+		return NULL;
+	}
+
+	refcount_set(&desc->refcount, 1);
+
+	/* Initialize mmu_notifier */
+	desc->mmu_notifier.ops = &ptshare_mmu_notifier_ops;
+	if (mmu_notifier_register(&desc->mmu_notifier, desc->ptshare_mm)) {
+		mmput(desc->ptshare_mm);
+		kfree(desc);
+		return NULL;
+	}
+
+	return desc;
+}
+
+void ptshare_put_desc(struct ptshare_desc *desc)
+{
+	if (refcount_dec_and_test(&desc->refcount)) {
+		mmu_notifier_unregister(&desc->mmu_notifier, desc->ptshare_mm);
+		mmput(desc->ptshare_mm);
+		kfree(desc);
+	}
+}
 
 /*
  * ptshare_validate_mmap - Verify if mmap request is valid in current context.
@@ -45,6 +151,7 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 			  unsigned long pgoff)
 {
 	struct vm_area_struct *vma;
+	struct ptshare_desc *desc;
 	int ret = 0;
 
 	if (!(vm_flags & VM_PT_SHARED))
@@ -74,8 +181,16 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 		     !IS_ALIGNED(len, PMD_SIZE)))
 		return -EINVAL;
 
+	desc = current->mm->ptshare_desc;
+	if (!desc) {
+		desc = ptshare_alloc_desc();
+		if (!desc)
+			return -ENOMEM;
+		current->mm->ptshare_desc = desc;
+	}
+
 	/* The global shared MM should never be the caller of this syscall */
-	BUG_ON(current->mm == ptshare_mm);
+	BUG_ON(current->mm == desc->ptshare_mm);
 
 	/*
 	 * Check for virtual address space collisions in the shared manager.
@@ -83,9 +198,9 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 	 * must have a unique virtual address across all participating
 	 * processes.
 	 */
-	mmap_read_lock_nested(ptshare_mm, SINGLE_DEPTH_NESTING);
-	vma = find_vma_intersection(ptshare_mm, addr, addr + len);
-	mmap_read_unlock(ptshare_mm);
+	mmap_read_lock_nested(desc->ptshare_mm, SINGLE_DEPTH_NESTING);
+	vma = find_vma_intersection(desc->ptshare_mm, addr, addr + len);
+	mmap_read_unlock(desc->ptshare_mm);
 
 	/*
 	 * If there is an existing mapping that overlaps with the requested
@@ -142,6 +257,8 @@ static inline int __ptshare_install_vma(struct vm_area_struct *vma)
 	unsigned long len = vma->vm_end - vma->vm_start;
 	unsigned long addr = vma->vm_start;
 	struct vm_area_struct *ptshare_vma;
+	struct ptshare_desc *desc = vma->vm_ptshare;
+	struct mm_struct *ptshare_mm = desc->ptshare_mm;
 	int ret = 0;
 
 	mmap_assert_write_locked(vma->vm_mm);
@@ -216,8 +333,11 @@ unsigned long ptshare_install_vma(struct mm_struct *mm, unsigned long addr)
 	if (!vma_shares_pagetables(vma))
 		return addr;
 
+	/* Initialize VMA's descriptor pointer */
+	vma->vm_ptshare = mm->ptshare_desc;
+
 	/* mm must refer to the private guest MM*/
-	BUG_ON(mm == ptshare_mm);
+	BUG_ON(mm == vma->vm_ptshare->ptshare_mm);
 
 	install_err = __ptshare_install_vma(vma);
 	if (!install_err)
@@ -251,6 +371,8 @@ vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf)
 	unsigned int flags = vmf->flags	& ~FAULT_FLAG_VMA_LOCK;
 	struct vm_fault ptshare_vmf = *vmf;
 	struct vm_area_struct *ptshare_vma;
+	struct ptshare_desc *desc = vmf->vma->vm_ptshare;
+	struct mm_struct *ptshare_mm = desc->ptshare_mm;
 	struct ptdesc *ptdesc;
 	vm_fault_t ret;
 	pgd_t *pgd;
@@ -396,7 +518,7 @@ bool ptshare_free_pte_range(struct mm_struct *mm, pgtable_t token)
 	struct ptdesc *pt;
 
 	/* The manager MM itself follows standard reclamation */
-	if (mm == ptshare_mm)
+	if (mm->ptshare_desc && mm == mm->ptshare_desc->ptshare_mm)
 		return false;
 
 	pt = page_ptdesc(token);
@@ -408,89 +530,3 @@ bool ptshare_free_pte_range(struct mm_struct *mm, pgtable_t token)
 
 	return false;
 }
-
-#ifdef CONFIG_X86
-static void ptshare_x86_flush_tlb_range_ipi(void *data)
-{
-	count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
-
-	/*
-	 * If INVPCID is available, use it to flush all non-global
-	 * mappings across all PCIDs. This avoids unnecessary
-	 * flushing of kernel (global) mappings.
-	 */
-	if (static_cpu_has(X86_FEATURE_INVPCID)) {
-		invpcid_flush_all_nonglobals();
-	} else {
-		/* Fallback to flushing everything if INVPCID is not supported */
-		__flush_tlb_all();
-	}
-}
-#else
-static void ptshare_x86_flush_tlb_range_ipi(void *data)
-{
-}
-#endif
-
-#ifdef CONFIG_ARM64
-static void ptshare_arm64_flush_tlb_range(const struct mmu_notifier_range *range)
-{
-	unsigned long start = range->start;
-	unsigned long end = range->end;
-	unsigned long stride = PAGE_SIZE;
-	unsigned long pages;
-
-	start = round_down(start, stride);
-	end = round_up(end, stride);
-	pages = (end - start) >> PAGE_SHIFT;
-
-	if (__flush_tlb_range_limit_excess(start, end, pages, stride)) {
-		flush_tlb_all();
-		return;
-	}
-
-	dsb(ishst);
-	__flush_tlb_range_op(vaae1is, start, pages, stride, 0,
-			     TLBI_TTL_UNKNOWN, false, lpa2_is_enabled());
-	__tlbi_sync_s1ish();
-	isb();
-}
-#else
-static void ptshare_arm64_flush_tlb_range(const struct mmu_notifier_range *range)
-{
-}
-#endif
-
-static int ptshare_invalidate_range_start(struct mmu_notifier *mn,
-				       const struct mmu_notifier_range *range)
-{
-	return 0;
-}
-
-static void ptshare_invalidate_range_end(struct mmu_notifier *mn,
-				       const struct mmu_notifier_range *range)
-{
-	if (IS_ENABLED(CONFIG_X86))
-		on_each_cpu(ptshare_x86_flush_tlb_range_ipi, (void *)range, 1);
-	else if (IS_ENABLED(CONFIG_ARM64))
-		ptshare_arm64_flush_tlb_range(range);
-}
-
-static const struct mmu_notifier_ops ptshare_mmu_notifier_ops = {
-	.invalidate_range_start = ptshare_invalidate_range_start,
-	.invalidate_range_end = ptshare_invalidate_range_end,
-};
-
-static struct mmu_notifier ptshare_mmu_notifier = {
-	.ops = &ptshare_mmu_notifier_ops,
-};
-
-static int __init ptshare_init(void)
-{
-	ptshare_mm = mm_alloc();
-	if (!ptshare_mm)
-		return -ENOMEM;
-
-	return mmu_notifier_register(&ptshare_mmu_notifier, ptshare_mm);
-}
-core_initcall(ptshare_init);
