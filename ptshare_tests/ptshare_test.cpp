@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <string.h>
 #include <iostream>
+#include "pagemap_util.h"
 
 #ifndef MAP_SHARED_PT
 #define MAP_SHARED_PT MAP_HUGETLB
@@ -949,6 +950,150 @@ TEST_F(PtShareTest, GuardRemoveSharedPTFailure) {
     }
 
     ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+}
+
+// Test 30: Multiple Independent Domains Isolation
+TEST_F(PtShareTest, MultipleDomainsIsolation) {
+    std::cout << "[ INFO ] Starting MultipleDomainsIsolation test..." << std::endl;
+    void* addr = (void*)0x600000000000;
+    int sync_pipe[2];
+    ASSERT_EQ(pipe(sync_pipe), 0);
+
+    // Process A: Create Domain A
+    pid_t pid_a = fork();
+    if (pid_a == 0) {
+        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        if (mapped == MAP_FAILED) {
+            perror("mmap A");
+            exit(1);
+        }
+        
+        // Populate mapping
+        ((char*)mapped)[0] = 'A';
+
+        // Signal Parent
+        write(sync_pipe[1], "A", 1);
+        
+        // Wait for Parent to allow exit
+        char buf;
+        if (read(sync_pipe[0], &buf, 1) <= 0) exit(7);
+        exit(0);
+    }
+
+    // Process B: Create Domain B
+    pid_t pid_b = fork();
+    if (pid_b == 0) {
+        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        if (mapped == MAP_FAILED) {
+            perror("mmap B");
+            exit(1);
+        }
+
+        // Wait for Parent to signal that Process A has populated its mapping
+        char buf;
+        if (read(sync_pipe[0], &buf, 1) <= 0) exit(8);
+        
+        // Process B should NOT see 'A' in its page tables yet if they are isolated domains.
+        int present = is_page_present(addr);
+        if (present == -1) exit(2);
+        
+        // If they shared page tables, is_page_present would return 1 because A already populated it.
+        // Since they have independent page tables, B's page table for 'addr' should be empty.
+        if (present == 1) {
+            std::cerr << "Process B saw populated page from Process A (Sharing detected!)" << std::endl;
+            exit(3);
+        }
+
+        // Now B faults, it should see 'A' from the page cache.
+        if (((char*)mapped)[0] != 'A') {
+            std::cerr << "Process B saw incorrect value: " << ((char*)mapped)[0] << std::endl;
+            exit(4);
+        }
+        
+        // Now B's page table should be populated.
+        present = is_page_present(addr);
+        if (present != 1) {
+            std::cerr << "Process B page not present after fault!" << std::endl;
+            exit(5);
+        }
+
+        exit(0);
+    }
+
+    // Parent coordination
+    char buf;
+    read(sync_pipe[0], &buf, 1); // Wait for A to populate
+    write(sync_pipe[1], "G", 1); // Signal B to check
+    
+    int status;
+    waitpid(pid_b, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "Process B failed with status " << WEXITSTATUS(status);
+    
+    write(sync_pipe[1], "K", 1); // Signal A to exit
+    waitpid(pid_a, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "Process A failed with status " << WEXITSTATUS(status);
+
+    std::cout << "[ OK   ] Multiple domains isolation verified." << std::endl;
+}
+
+// Test 31: Hierarchy Crossover (Inheriting Domain A, Creating Domain B)
+TEST_F(PtShareTest, HierarchyCrossover) {
+    std::cout << "[ INFO ] Starting HierarchyCrossover test..." << std::endl;
+    void* addr_a = (void*)0x500000000000;
+    void* addr_b = (void*)0x510000000000;
+
+    // Zygote A creates Domain A
+    void* mapped_a = do_mmap(addr_a, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped_a, MAP_FAILED);
+    ((char*)mapped_a)[0] = 'Z';
+
+    pid_t pid_app = fork();
+    if (pid_app == 0) {
+        // App process inherits Domain A
+        if (((char*)addr_a)[0] != 'Z') {
+            std::cerr << "App saw incorrect value in inherited Domain A" << std::endl;
+            exit(1);
+        }
+
+        // App process creates its own Domain B
+        // Need a different file for Domain B to be clean, but same test_file is okay if address is different
+        // Actually, ptshare_validate_mmap checks address overlaps in ptshare_mm.
+        // Since Domain A and Domain B have DIFFERENT ptshare_mm, they can use same addresses too.
+        // But for clarity let's use different addresses.
+        void* mapped_b = do_mmap(addr_b, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        if (mapped_b == MAP_FAILED) {
+            perror("App mmap B");
+            exit(2);
+        }
+        ((char*)mapped_b)[0] = 'X';
+
+        // App process forks App child
+        pid_t pid_child = fork();
+        if (pid_child == 0) {
+            // App child inherits both Domain A and Domain B
+            if (((char*)addr_a)[0] != 'Z') exit(3);
+            if (((char*)addr_b)[0] != 'X') exit(4);
+            
+            // Verify sharing in Domain B
+            ((char*)addr_b)[0] = 'Y';
+            exit(0);
+        }
+        int status;
+        waitpid(pid_child, &status, 0);
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) exit(5);
+
+        // Verify sharing from child in Domain B
+        if (((char*)addr_b)[0] != 'Y') exit(6);
+        
+        exit(0);
+    }
+
+    int status;
+    waitpid(pid_app, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "App process failed with status " << WEXITSTATUS(status);
+
+    munmap(mapped_a, PMD_SIZE);
+    std::cout << "[ OK   ] Hierarchy crossover verified." << std::endl;
 }
 
 /*
