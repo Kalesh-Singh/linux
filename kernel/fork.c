@@ -98,6 +98,8 @@
 #include <linux/scs.h>
 #include <linux/io_uring.h>
 #include <linux/io_uring_types.h>
+#include <linux/ptshare.h>
+
 #include <linux/bpf.h>
 #include <linux/stackprotector.h>
 #include <linux/user_events.h>
@@ -1186,6 +1188,8 @@ static inline void __mmput(struct mm_struct *mm)
 		module_put(mm->binfmt->module);
 	lru_gen_del_mm(mm);
 	futex_hash_free(mm);
+	if (mm->ptshare_desc)
+		ptshare_put_desc(mm->ptshare_desc);
 	mmdrop(mm);
 }
 

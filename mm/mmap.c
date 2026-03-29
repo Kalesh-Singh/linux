@@ -1830,7 +1830,7 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 			tmp->vm_ops->open(tmp);
 
 		if (vma_shares_pagetables(tmp))
-			ptshare_get_vma(tmp);
+			ptshare_get_vma(tmp, tmp->vm_ptshare);
 
 		file = tmp->vm_file;
 		if (file) {

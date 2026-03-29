@@ -473,7 +473,7 @@ void remove_vma(struct vm_area_struct *vma)
 	vm_area_free(vma);
 
 	if (vma_shares_pagetables(vma))
-		ptshare_put_vma(vma);
+		ptshare_put_vma(vma, vma->vm_ptshare);
 }
 
 /*

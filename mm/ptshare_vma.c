@@ -20,7 +20,7 @@
 
 static inline void ptshare_remove_vma(struct vm_area_struct *vma)
 {
-	struct ptshare_desc *desc = vma_ptshare(vma);
+	struct ptshare_desc *desc = vma->vm_ptshare;
 	struct mm_struct *ptshare_mm = desc->ptshare_mm;
 
 	/* Destroy the shadow VMA in ptshare_mm */
@@ -39,9 +39,8 @@ void ptshare_vma_refcount_destroy(struct vm_area_struct *vma)
 {
 }
 
-void ptshare_get_vma(struct vm_area_struct *vma)
+void ptshare_get_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
 {
-	struct ptshare_desc *desc = vma_ptshare(vma);
 	unsigned long addr = vma->vm_start;
 	struct vm_area_struct *shadow_vma;
 
@@ -55,6 +54,7 @@ void ptshare_get_vma(struct vm_area_struct *vma)
 /**
  * ptshare_put_vma - Release a reference to a shared VMA.
  * @vma: The guest VMA.
+ * @desc: The sharing domain descriptor.
  *
  * This function implements a decoupled locking protocol to safely manage
  * the lifecycle of shared VMAs:
@@ -69,9 +69,8 @@ void ptshare_get_vma(struct vm_area_struct *vma)
  *    because the VMA remains in the ptshare_mm tree until the unmap
  *    operation completes.
  */
-void ptshare_put_vma(struct vm_area_struct *vma)
+void ptshare_put_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
 {
-	struct ptshare_desc *desc = vma_ptshare(vma);
 	unsigned long addr = vma->vm_start;
 	struct vm_area_struct *shadow_vma;
 	bool should_remove = false;
@@ -106,6 +105,7 @@ void ptshare_put_vma(struct vm_area_struct *vma)
 int ptshare_unshare_vma_locked(struct vm_area_struct *vma)
 {
 	struct mm_struct *mm = vma->vm_mm;
+	struct ptshare_desc *desc = vma->vm_ptshare;
 	unsigned long addr;
 	int ret = 0;
 
@@ -113,6 +113,8 @@ int ptshare_unshare_vma_locked(struct vm_area_struct *vma)
 
 	if (!vma_shares_pagetables(vma))
 		return 0;
+
+	BUG_ON(!desc);
 
 	for (addr = vma->vm_start; addr < vma->vm_end; addr += PMD_SIZE) {
 		pgd_t *pgd;
@@ -213,7 +215,7 @@ int ptshare_unshare_vma_locked(struct vm_area_struct *vma)
 	vm_flags_clear(vma, VM_PT_SHARED);
 
 	/* Drop the reference to the manager's shadow VMA */
-	ptshare_put_vma(vma);
+	ptshare_put_vma(vma, desc);
 
 	return 0;
 }

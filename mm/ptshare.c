@@ -114,18 +114,26 @@ struct ptshare_desc *ptshare_alloc_desc(void)
 
 	/* Initialize mmu_notifier */
 	desc->mmu_notifier.ops = &ptshare_mmu_notifier_ops;
-	if (mmu_notifier_register(&desc->mmu_notifier, desc->ptshare_mm)) {
+
+	/*
+	 * Use the nested lock to avoid lockdep warnings when called
+	 * from do_mmap while already holding the current mm's mmap_lock.
+	 */
+	mmap_write_lock_nested(desc->ptshare_mm, SINGLE_DEPTH_NESTING);
+	if (__mmu_notifier_register(&desc->mmu_notifier, desc->ptshare_mm)) {
+		mmap_write_unlock(desc->ptshare_mm);
 		mmput(desc->ptshare_mm);
 		kfree(desc);
 		return NULL;
 	}
+	mmap_write_unlock(desc->ptshare_mm);
 
 	return desc;
 }
 
 void ptshare_put_desc(struct ptshare_desc *desc)
 {
-	if (refcount_dec_and_test(&desc->refcount)) {
+	if (desc && refcount_dec_and_test(&desc->refcount)) {
 		mmu_notifier_unregister(&desc->mmu_notifier, desc->ptshare_mm);
 		mmput(desc->ptshare_mm);
 		kfree(desc);
