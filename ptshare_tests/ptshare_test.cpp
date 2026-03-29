@@ -16,16 +16,23 @@
 #define MAP_SHARED_PT MAP_HUGETLB
 #endif
 
-#define PMD_SIZE (2 * 1024 * 1024)
-#ifndef PAGE_SIZE
-#define PAGE_SIZE 4096
-#endif
+static const size_t kPageSize = getpagesize();
+/*
+ * Generic PMD size calculation:
+ *    - Each page table (PT) is of size 1 page.
+ *    - Each page table entry (PTE) is of size 64 bits.
+ *    - Each PTE locates one physical page frame (PFN) of size 1 page.
+ *    - A PMD entry locates 1 page table (PT)
+ *
+ *   PMD size = Num entries in a PT * page_size
+ */
+static const size_t kPmdSize = (kPageSize / sizeof(uint64_t)) * kPageSize;
 
 class PtShareTest : public ::testing::Test {
 protected:
     int fd;
     const char* test_file = "ptshare_test_file";
-    size_t mapping_size = 1024UL * PMD_SIZE;
+    size_t mapping_size = 1024UL * kPmdSize;
 
     void SetUp() override {
         fd = open(test_file, O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -38,8 +45,8 @@ protected:
         unlink(test_file);
     }
 
-    void* do_mmap(void* addr, size_t len, int prot, int flags) {
-        return mmap(addr, len, prot, flags | MAP_SHARED_PT | MAP_FIXED, fd, 0);
+    void* do_mmap(void* addr, size_t len, int prot, int flags, off_t offset = 0) {
+        return mmap(addr, len, prot, flags | MAP_SHARED_PT | MAP_FIXED, fd, offset);
     }
 };
 
@@ -47,8 +54,8 @@ protected:
 TEST_F(PtShareTest, BasicMapping) {
     std::cout << "[ INFO ] Starting BasicMapping test..." << std::endl;
     void* addr = (void*)0x700000000000;
-    std::cout << "[ INFO ] Mapping " << PMD_SIZE << " bytes at " << addr << " with MAP_SHARED_PT..." << std::endl;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_PRIVATE);
+    std::cout << "[ INFO ] Mapping " << kPmdSize << " bytes at " << addr << " with MAP_SHARED_PT..." << std::endl;
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_PRIVATE);
     ASSERT_NE(mapped, MAP_FAILED) << "mmap failed: " << strerror(errno);
     ASSERT_EQ(mapped, addr);
 
@@ -57,16 +64,16 @@ TEST_F(PtShareTest, BasicMapping) {
     EXPECT_EQ(val, 0);
 
     std::cout << "[ INFO ] Unmapping..." << std::endl;
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
     std::cout << "[ OK   ] BasicMapping test completed." << std::endl;
 }
 
 // Test 2: Invalid alignment (address) should fail
 TEST_F(PtShareTest, AlignmentFailureAddress) {
     std::cout << "[ INFO ] Starting AlignmentFailureAddress test..." << std::endl;
-    void* addr = (void*)(0x700000000000 + PAGE_SIZE);
+    void* addr = (void*)(0x700000000000 + kPageSize);
     std::cout << "[ INFO ] Attempting non-PMD aligned mapping at " << addr << "..." << std::endl;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_PRIVATE);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_PRIVATE);
     EXPECT_EQ(mapped, MAP_FAILED);
     EXPECT_EQ(errno, EINVAL);
     std::cout << "[ OK   ] Correctly failed with EINVAL." << std::endl;
@@ -76,8 +83,8 @@ TEST_F(PtShareTest, AlignmentFailureAddress) {
 TEST_F(PtShareTest, AlignmentFailureSize) {
     std::cout << "[ INFO ] Starting AlignmentFailureSize test..." << std::endl;
     void* addr = (void*)0x710000000000;
-    std::cout << "[ INFO ] Attempting non-PMD aligned size mapping (" << PMD_SIZE + PAGE_SIZE << " bytes)..." << std::endl;
-    void* mapped = do_mmap(addr, PMD_SIZE + PAGE_SIZE, PROT_READ, MAP_PRIVATE);
+    std::cout << "[ INFO ] Attempting non-PMD aligned size mapping (" << kPmdSize + kPageSize << " bytes)..." << std::endl;
+    void* mapped = do_mmap(addr, kPmdSize + kPageSize, PROT_READ, MAP_PRIVATE);
     EXPECT_EQ(mapped, MAP_FAILED);
     EXPECT_EQ(errno, EINVAL);
     std::cout << "[ OK   ] Correctly failed with EINVAL." << std::endl;
@@ -88,7 +95,7 @@ TEST_F(PtShareTest, WritePrivateFailure) {
     std::cout << "[ INFO ] Starting WritePrivateFailure test..." << std::endl;
     void* addr = (void*)0x710000200000;
     std::cout << "[ INFO ] Attempting PROT_WRITE | MAP_PRIVATE mapping..." << std::endl;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_PRIVATE);
     EXPECT_EQ(mapped, MAP_FAILED);
     EXPECT_EQ(errno, EINVAL);
     std::cout << "[ OK   ] Correctly failed with EINVAL." << std::endl;
@@ -102,7 +109,7 @@ TEST_F(PtShareTest, FaultSharing) {
     std::cout << "[ INFO ] Forking child to populate mapping..." << std::endl;
     pid_t pid = fork();
     if (pid == 0) {
-        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
         if (mapped == MAP_FAILED) {
             std::cerr << "Child mmap failed: " << strerror(errno) << std::endl;
             exit(1);
@@ -115,18 +122,18 @@ TEST_F(PtShareTest, FaultSharing) {
     ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
     std::cout << "[ INFO ] Child finished. Parent mapping and checking value..." << std::endl;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
     EXPECT_EQ(((char*)mapped)[0], 'A');
     std::cout << "[ OK   ] Parent saw value 'A' from child (Shared Page Table working)." << std::endl;
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
 }
 
 // Test 5: Fork Inheritance
 TEST_F(PtShareTest, ForkInheritance) {
     std::cout << "[ INFO ] Starting ForkInheritance test..." << std::endl;
     void* addr = (void*)0x730000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
     ((char*)mapped)[0] = 'B';
 
@@ -146,7 +153,7 @@ TEST_F(PtShareTest, ForkInheritance) {
     EXPECT_EQ(((char*)mapped)[0], 'C');
     std::cout << "[ OK   ] Child inherited mapping and parent saw child's write." << std::endl;
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
 }
 
 // Test 11: MADV_POPULATE_READ populates shared tables
@@ -155,7 +162,7 @@ TEST_F(PtShareTest, SharedPopulate) {
     void* addr = (void*)0x7A0000000000;
 
     std::cout << "[ INFO ] Mapping in parent and child..." << std::endl;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
     ((char*)mapped)[0] = 'Y';
 
@@ -163,7 +170,7 @@ TEST_F(PtShareTest, SharedPopulate) {
     if (pid == 0) {
         // Child should already see 'Y' but we use madvise to ensure population
         std::cout << "[ INFO ] Child populating via MADV_POPULATE_READ..." << std::endl;
-        if (madvise(addr, PMD_SIZE, MADV_POPULATE_READ) != 0) exit(1);
+        if (madvise(addr, kPmdSize, MADV_POPULATE_READ) != 0) exit(1);
         exit(0);
     }
 
@@ -175,7 +182,7 @@ TEST_F(PtShareTest, SharedPopulate) {
     // but we verify correctness).
     EXPECT_EQ(((char*)mapped)[0], 'Y');
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
     std::cout << "[ OK   ] Shared population verified." << std::endl;
 }
 
@@ -187,17 +194,17 @@ TEST_F(PtShareTest, MultiProcessStress) {
     void* addr = (void*)0x7B0000000000;
 
     // Parent populates the first page of each PMD
-    void* mapped = do_mmap(addr, num_pmds * PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, num_pmds * kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
     for (int i = 0; i < num_pmds; i++) {
-        ((char*)mapped)[i * PMD_SIZE] = 'S';
+        ((char*)mapped)[i * kPmdSize] = 'S';
     }
 
     std::cout << "[ INFO ] Forking " << num_procs << " children to verify sharing..." << std::endl;
     for (int i = 0; i < num_procs; i++) {
         if (fork() == 0) {
             for (int j = 0; j < num_pmds; j++) {
-                if (((char*)mapped)[j * PMD_SIZE] != 'S') exit(2);
+                if (((char*)mapped)[j * kPmdSize] != 'S') exit(2);
             }
             exit(0);
         }
@@ -213,7 +220,7 @@ TEST_F(PtShareTest, MultiProcessStress) {
     }
 
     EXPECT_EQ(failed_procs, 0);
-    ASSERT_EQ(munmap(mapped, num_pmds * PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, num_pmds * kPmdSize), 0);
     std::cout << "[ OK   ] Multi-process stress completed (" << num_procs << " processes)." << std::endl;
 }
 
@@ -223,7 +230,7 @@ TEST_F(PtShareTest, DeepForkRefcounting) {
     void* addr = (void*)0x7E0000000000;
 
     // Parent populates
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
     ((char*)mapped)[0] = 'G';
 
@@ -245,7 +252,7 @@ TEST_F(PtShareTest, DeepForkRefcounting) {
     // Parent exits immediately
     // Note: We can't actually "exit" the test process, but we can munmap
     // to simulate the last reference from this process going away.
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
 
     // Wait for the grandchild (pid2) indirectly via pid1
     int status;
@@ -265,7 +272,7 @@ TEST_F(PtShareTest, ReadOnlyPrivateSharing) {
     void* addr = (void*)0x7F0000000000;
 
     // Create a read-only private mapping
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_PRIVATE);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_PRIVATE);
     ASSERT_NE(mapped, MAP_FAILED);
 
     pid_t pid = fork();
@@ -281,14 +288,14 @@ TEST_F(PtShareTest, ReadOnlyPrivateSharing) {
 
     // Verify that writing to the file (from another mapping)
     // propagates to this "shared" private mapping if it's still shared.
-    void* writer = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void* writer = mmap(NULL, kPageSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     ASSERT_NE(writer, MAP_FAILED);
     ((char*)writer)[0] = 'W';
 
     EXPECT_EQ(((char*)mapped)[0], 'W');
 
-    munmap(writer, PAGE_SIZE);
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    munmap(writer, kPageSize);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
     std::cout << "[ OK   ] Read-only private sharing verified." << std::endl;
 }
 
@@ -296,15 +303,15 @@ TEST_F(PtShareTest, ReadOnlyPrivateSharing) {
 TEST_F(PtShareTest, MadviseDontFork) {
     std::cout << "[ INFO ] Starting MadviseDontFork test..." << std::endl;
     void* addr = (void*)0x690000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTFORK), 0);
+    ASSERT_EQ(madvise(mapped, kPmdSize, MADV_DONTFORK), 0);
 
     pid_t pid = fork();
     if (pid == 0) {
         // Child should not have this VMA. Check by trying to map something else there.
-        void* check = mmap(addr, PAGE_SIZE, PROT_READ, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        void* check = mmap(addr, kPageSize, PROT_READ, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (check == addr) {
             exit(0);
         }
@@ -315,7 +322,7 @@ TEST_F(PtShareTest, MadviseDontFork) {
     waitpid(pid, &status, 0);
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
-    munmap(mapped, PMD_SIZE);
+    munmap(mapped, kPmdSize);
     std::cout << "[ OK   ] MADV_DONTFORK interaction verified." << std::endl;
 }
 
@@ -326,7 +333,7 @@ TEST_F(PtShareTest, ExecveCleanup) {
 
     pid_t pid = fork();
     if (pid == 0) {
-        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+        void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_SHARED);
         if (mapped == MAP_FAILED) exit(1);
 
         // Replace process image. This should trigger VMA cleanup.
@@ -348,7 +355,7 @@ TEST_F(PtShareTest, SplitOnGUP) {
 
     pid_t pid = fork();
     if (pid == 0) {
-        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_PRIVATE);
+        void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_PRIVATE);
         if (mapped == MAP_FAILED) exit(1);
 
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
@@ -386,14 +393,14 @@ TEST_F(PtShareTest, PtraceBoundary) {
 
     pid_t pid = fork();
     if (pid == 0) {
-        void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_PRIVATE);
+        void* mapped = do_mmap(addr, 2 * kPmdSize, PROT_READ, MAP_PRIVATE);
         if (mapped == MAP_FAILED) exit(1);
 
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
         raise(SIGSTOP);
 
         // Verify both pages saw the write
-        if (((char*)mapped)[PMD_SIZE - 1] != 'X' || ((char*)mapped)[PMD_SIZE] != 'Y') {
+        if (((char*)mapped)[kPmdSize - 1] != 'X' || ((char*)mapped)[kPmdSize] != 'Y') {
             exit(2);
         }
         exit(0);
@@ -405,7 +412,7 @@ TEST_F(PtShareTest, PtraceBoundary) {
 
     // Ptrace write spanning the boundary between the two PMDs
     std::cout << "[ INFO ] Poking data across PMD boundary..." << std::endl;
-    unsigned long boundary_addr = (unsigned long)addr + PMD_SIZE - 1;
+    unsigned long boundary_addr = (unsigned long)addr + kPmdSize - 1;
     long data = ('Y' << 8) | 'X'; // Little endian: X at boundary-1, Y at boundary
     long ret = ptrace(PTRACE_POKEDATA, pid, (void*)boundary_addr, (void*)data);
     ASSERT_NE(ret, -1) << "ptrace poke failed: " << strerror(errno);
@@ -429,7 +436,7 @@ TEST_F(PtShareTest, PtraceReadNoUnshare) {
     ASSERT_EQ(pwrite(fd, &val, 1, 0), 1);
 
     // Parent creates the shared PT mapping
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
     ASSERT_EQ(((char*)mapped)[0], 'R');
 
@@ -473,7 +480,7 @@ TEST_F(PtShareTest, PtraceReadNoUnshare) {
     waitpid(pid, &status, 0);
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
-    munmap(mapped, PMD_SIZE);
+    munmap(mapped, kPmdSize);
     std::cout << "[ OK   ] Ptrace read-only peek completed." << std::endl;
 }
 
@@ -486,7 +493,7 @@ TEST_F(PtShareTest, ProcessVmWriteUnshare) {
     pid_t pid = fork();
     if (pid == 0) {
         // Use PROT_WRITE for process_vm_writev as it doesn't support FOLL_FORCE
-        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
         if (mapped == MAP_FAILED) exit(1);
 
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
@@ -527,9 +534,9 @@ TEST_F(PtShareTest, GupFastRace) {
     void* addr = (void*)0x650000000000;
 
     // Parent maps and populates
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
-    memset(mapped, 'G', PMD_SIZE);
+    memset(mapped, 'G', kPmdSize);
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -539,14 +546,14 @@ TEST_F(PtShareTest, GupFastRace) {
 
         struct iovec iov;
         iov.iov_base = addr;
-        iov.iov_len = PAGE_SIZE;
+        iov.iov_len = kPageSize;
 
         for (int i = 0; i < 1000; i++) {
             // vmsplice triggers gup_fast on the memory
             vmsplice(pipefds[1], &iov, 1, 0);
             // Drain pipe so it doesn't block
-            char junk[PAGE_SIZE];
-            if (read(pipefds[0], junk, PAGE_SIZE) < 0) break;
+            char junk[kPageSize];
+            if (read(pipefds[0], (void*)junk, kPageSize) < 0) break;
         }
         exit(0);
     }
@@ -554,9 +561,9 @@ TEST_F(PtShareTest, GupFastRace) {
     // Parent: high-frequency unsharing via mprotect toggle
     for (int i = 0; i < 100; i++) {
         // This will trigger unsharing in the parent's MM
-        mprotect(mapped, PMD_SIZE, PROT_READ);
+        mprotect(mapped, kPmdSize, PROT_READ);
         // Toggle back
-        mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE);
+        mprotect(mapped, kPmdSize, PROT_READ | PROT_WRITE);
         usleep(100);
     }
 
@@ -564,7 +571,7 @@ TEST_F(PtShareTest, GupFastRace) {
     waitpid(pid, &status, 0);
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
-    munmap(mapped, PMD_SIZE);
+    munmap(mapped, kPmdSize);
     std::cout << "[ OK   ] Gup-fast race completed without crash." << std::endl;
 }
 
@@ -574,9 +581,9 @@ TEST_F(PtShareTest, GupFastODirect) {
     void* addr = (void*)0x640000000000;
 
     // Parent maps and populates
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
-    memset(mapped, 'D', PMD_SIZE);
+    memset(mapped, 'D', kPmdSize);
 
     // Create a temporary file for O_DIRECT reads
     const char* tmp_io_file = "ptshare_odirect_tmp";
@@ -584,7 +591,7 @@ TEST_F(PtShareTest, GupFastODirect) {
     if (io_fd < 0) {
         if (errno == EINVAL) {
             std::cout << "[ SKIP ] O_DIRECT not supported on this filesystem." << std::endl;
-            munmap(mapped, PMD_SIZE);
+            munmap(mapped, kPmdSize);
             return;
         }
         ASSERT_GE(io_fd, 0) << "Failed to open O_DIRECT file: " << strerror(errno);
@@ -617,8 +624,8 @@ TEST_F(PtShareTest, GupFastODirect) {
 
     // Parent: high-frequency unsharing via mprotect toggle
     for (int i = 0; i < 100; i++) {
-        mprotect(mapped, PMD_SIZE, PROT_READ);
-        mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE);
+        mprotect(mapped, kPmdSize, PROT_READ);
+        mprotect(mapped, kPmdSize, PROT_READ | PROT_WRITE);
         usleep(100);
     }
 
@@ -628,7 +635,7 @@ TEST_F(PtShareTest, GupFastODirect) {
 
     close(io_fd);
     unlink(tmp_io_file);
-    munmap(mapped, PMD_SIZE);
+    munmap(mapped, kPmdSize);
     std::cout << "[ OK   ] Gup-fast O_DIRECT race completed without crash." << std::endl;
 }
 
@@ -638,13 +645,13 @@ TEST_F(PtShareTest, OverlapUnsharing) {
     void* addr = (void*)0x6E0000000000;
 
     // Map 2 PMDs
-    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
+    void* mapped = do_mmap(addr, 2 * kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     // Map a single page in the middle (overlaps with the second PMD)
     // This should trigger unsharing of the second PMD.
-    void* overlap_addr = (void*)((unsigned long)addr + PMD_SIZE);
-    void* overlap = mmap(overlap_addr, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* overlap_addr = (void*)((unsigned long)addr + kPmdSize);
+    void* overlap = mmap(overlap_addr, kPageSize, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     ASSERT_NE(overlap, MAP_FAILED);
     ASSERT_EQ(overlap, overlap_addr);
 
@@ -654,8 +661,8 @@ TEST_F(PtShareTest, OverlapUnsharing) {
     // First PMD should still be accessible and unaffected
     EXPECT_EQ(((char*)mapped)[0], 0);
 
-    munmap(overlap, PAGE_SIZE);
-    ASSERT_EQ(munmap(mapped, 2 * PMD_SIZE), 0);
+    munmap(overlap, kPageSize);
+    ASSERT_EQ(munmap(mapped, 2 * kPmdSize), 0);
     std::cout << "[ OK   ] Overlap unsharing verified." << std::endl;
 }
 
@@ -663,18 +670,18 @@ TEST_F(PtShareTest, OverlapUnsharing) {
 TEST_F(PtShareTest, UnsharePartialMunmap) {
     std::cout << "[ INFO ] Starting UnsharePartialMunmap test..." << std::endl;
     void* addr = (void*)0x770000000000;
-    std::cout << "[ INFO ] Mapping 2x PMD_SIZE at " << addr << "..." << std::endl;
-    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
+    std::cout << "[ INFO ] Mapping 2x kPmdSize at " << addr << "..." << std::endl;
+    void* mapped = do_mmap(addr, 2 * kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     std::cout << "[ INFO ] Performing partial munmap (first PMD)..." << std::endl;
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0) << "partial munmap failed: " << strerror(errno);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0) << "partial munmap failed: " << strerror(errno);
 
-    void* remaining = (void*)((unsigned long)mapped + PMD_SIZE);
+    void* remaining = (void*)((unsigned long)mapped + kPmdSize);
     std::cout << "[ INFO ] Verifying remaining part at " << remaining << "..." << std::endl;
     EXPECT_EQ(((char*)remaining)[0], 0);
 
-    ASSERT_EQ(munmap(remaining, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(remaining, kPmdSize), 0);
     std::cout << "[ OK   ] Partial munmap (split) unsharing succeeded." << std::endl;
 }
 
@@ -682,17 +689,17 @@ TEST_F(PtShareTest, UnsharePartialMunmap) {
 TEST_F(PtShareTest, UnshareMprotect) {
     std::cout << "[ INFO ] Starting UnshareMprotect test..." << std::endl;
     void* addr = (void*)0x740000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     std::cout << "[ INFO ] Triggering mprotect(PROT_WRITE) to force unshare..." << std::endl;
-    ASSERT_EQ(mprotect(mapped, PMD_SIZE, PROT_READ | PROT_WRITE), 0) << "mprotect failed: " << strerror(errno);
+    ASSERT_EQ(mprotect(mapped, kPmdSize, PROT_READ | PROT_WRITE), 0) << "mprotect failed: " << strerror(errno);
 
     std::cout << "[ INFO ] Verifying write access after unsharing..." << std::endl;
     ((char*)mapped)[0] = 'D';
     EXPECT_EQ(((char*)mapped)[0], 'D');
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
     std::cout << "[ OK   ] mprotect unsharing succeeded." << std::endl;
 }
 
@@ -700,19 +707,19 @@ TEST_F(PtShareTest, UnshareMprotect) {
 TEST_F(PtShareTest, UnshareMremap) {
     std::cout << "[ INFO ] Starting UnshareMremap test..." << std::endl;
     void* addr = (void*)0x750000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     void* new_addr = (void*)0x760000000000;
     std::cout << "[ INFO ] Remapping from " << addr << " to " << new_addr << "..." << std::endl;
-    void* remapped = mremap(mapped, PMD_SIZE, PMD_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED, new_addr);
+    void* remapped = mremap(mapped, kPmdSize, kPmdSize, MREMAP_MAYMOVE | MREMAP_FIXED, new_addr);
     ASSERT_NE(remapped, MAP_FAILED) << "mremap failed: " << strerror(errno);
     ASSERT_EQ(remapped, new_addr);
 
     std::cout << "[ INFO ] Verifying access at new address..." << std::endl;
     EXPECT_EQ(((char*)remapped)[0], 0);
 
-    ASSERT_EQ(munmap(remapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(remapped, kPmdSize), 0);
     std::cout << "[ OK   ] mremap unsharing succeeded." << std::endl;
 }
 
@@ -722,19 +729,19 @@ TEST_F(PtShareTest, MremapExpand) {
     void* addr = (void*)0x6D0000000000;
 
     // Map 1 PMD
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     // Expand to 2 PMDs
     std::cout << "[ INFO ] Expanding mapping via mremap..." << std::endl;
-    void* expanded = mremap(mapped, PMD_SIZE, 2 * PMD_SIZE, MREMAP_MAYMOVE);
+    void* expanded = mremap(mapped, kPmdSize, 2 * kPmdSize, MREMAP_MAYMOVE);
     ASSERT_NE(expanded, MAP_FAILED);
 
     // Verify access
     EXPECT_EQ(((char*)expanded)[0], 0);
-    EXPECT_EQ(((char*)expanded)[PMD_SIZE], 0);
+    EXPECT_EQ(((char*)expanded)[kPmdSize], 0);
 
-    ASSERT_EQ(munmap(expanded, 2 * PMD_SIZE), 0);
+    ASSERT_EQ(munmap(expanded, 2 * kPmdSize), 0);
     std::cout << "[ OK   ] mremap expansion verified." << std::endl;
 }
 
@@ -744,15 +751,15 @@ TEST_F(PtShareTest, PartialMremap) {
     void* addr = (void*)0x6C0000000000;
 
     // Map 2 PMDs
-    void* mapped = do_mmap(addr, 2 * PMD_SIZE, PROT_READ, MAP_SHARED);
+    void* mapped = do_mmap(addr, 2 * kPmdSize, PROT_READ, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     // Move only the second PMD to a new location
-    void* second_pmd = (void*)((unsigned long)mapped + PMD_SIZE);
+    void* second_pmd = (void*)((unsigned long)mapped + kPmdSize);
     void* new_loc = (void*)0x6B0000000000;
 
     std::cout << "[ INFO ] Moving second PMD via mremap..." << std::endl;
-    void* remapped = mremap(second_pmd, PMD_SIZE, PMD_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED, new_loc);
+    void* remapped = mremap(second_pmd, kPmdSize, kPmdSize, MREMAP_MAYMOVE | MREMAP_FIXED, new_loc);
     ASSERT_NE(remapped, MAP_FAILED);
     ASSERT_EQ(remapped, new_loc);
 
@@ -760,8 +767,8 @@ TEST_F(PtShareTest, PartialMremap) {
     EXPECT_EQ(((char*)mapped)[0], 0);
     EXPECT_EQ(((char*)remapped)[0], 0);
 
-    munmap(mapped, PMD_SIZE);
-    munmap(remapped, PMD_SIZE);
+    munmap(mapped, kPmdSize);
+    munmap(remapped, kPmdSize);
     std::cout << "[ OK   ] Partial mremap verified." << std::endl;
 }
 
@@ -770,13 +777,13 @@ TEST_F(PtShareTest, UnshareMadviseDontNeed) {
     std::cout << "[ INFO ] Starting UnshareMadviseDontNeed test..." << std::endl;
     void* addr = (void*)0x790000000000;
     // Must use MAP_SHARED for PROT_WRITE + MAP_SHARED_PT
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     ((char*)mapped)[0] = 'X';
 
     std::cout << "[ INFO ] Triggering madvise(MADV_DONTNEED) to force unshare..." << std::endl;
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTNEED), 0) << "madvise failed: " << strerror(errno);
+    ASSERT_EQ(madvise(mapped, kPmdSize, MADV_DONTNEED), 0) << "madvise failed: " << strerror(errno);
 
     // Note: On some kernels/configurations, MADV_DONTNEED on MAP_SHARED
     // might not immediately zap the page if it's dirty.
@@ -784,7 +791,7 @@ TEST_F(PtShareTest, UnshareMadviseDontNeed) {
     // For the vanilla kernel test, we just ensure it doesn't crash.
     (void)((char*)mapped)[0];
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
     std::cout << "[ OK   ] madvise unsharing succeeded." << std::endl;
 }
 
@@ -792,17 +799,17 @@ TEST_F(PtShareTest, UnshareMadviseDontNeed) {
 TEST_F(PtShareTest, UnshareMadviseRemove) {
     std::cout << "[ INFO ] Starting UnshareMadviseRemove test..." << std::endl;
     void* addr = (void*)0x7C0000000000;
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     ((char*)mapped)[0] = 'R';
 
     std::cout << "[ INFO ] Triggering madvise(MADV_REMOVE) to force unshare..." << std::endl;
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_REMOVE), 0) << "madvise failed: " << strerror(errno);
+    ASSERT_EQ(madvise(mapped, kPmdSize, MADV_REMOVE), 0) << "madvise failed: " << strerror(errno);
 
     EXPECT_EQ(((char*)mapped)[0], 0);
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
     std::cout << "[ OK   ] madvise(MADV_REMOVE) unsharing succeeded." << std::endl;
 }
 
@@ -811,7 +818,7 @@ TEST_F(PtShareTest, MadviseDontNeedIsolation) {
     std::cout << "[ INFO ] Starting MadviseDontNeedIsolation test..." << std::endl;
     void* addr = (void*)0x630000000000;
     // Map in parent and populate
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
     ((char*)mapped)[0] = 'X';
 
@@ -838,7 +845,7 @@ TEST_F(PtShareTest, MadviseDontNeedIsolation) {
 
     // Parent: madvise DONTNEED. This triggers unsharing.
     std::cout << "[ INFO ] Parent triggering madvise(MADV_DONTNEED)..." << std::endl;
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_DONTNEED), 0);
+    ASSERT_EQ(madvise(mapped, kPmdSize, MADV_DONTNEED), 0);
 
     // Parent: verify it can still see its data. Since it's MAP_SHARED,
     // MADV_DONTNEED zaps PTEs but not the page cache. refault should see 'X'.
@@ -848,7 +855,7 @@ TEST_F(PtShareTest, MadviseDontNeedIsolation) {
     waitpid(pid, &status, 0);
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
     std::cout << "[ OK   ] Madvise isolation verified." << std::endl;
 }
 
@@ -857,7 +864,7 @@ TEST_F(PtShareTest, MadviseRemoveIsolation) {
     std::cout << "[ INFO ] Starting MadviseRemoveIsolation test..." << std::endl;
     void* addr = (void*)0x620000000000;
     // Map in parent and populate
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
     ((char*)mapped)[0] = 'R';
 
@@ -883,7 +890,7 @@ TEST_F(PtShareTest, MadviseRemoveIsolation) {
 
     // Parent: madvise REMOVE. This triggers unsharing.
     std::cout << "[ INFO ] Parent triggering madvise(MADV_REMOVE)..." << std::endl;
-    ASSERT_EQ(madvise(mapped, PMD_SIZE, MADV_REMOVE), 0);
+    ASSERT_EQ(madvise(mapped, kPmdSize, MADV_REMOVE), 0);
 
     // Parent: verify its own data is gone (should be 0)
     EXPECT_EQ(((char*)mapped)[0], 0);
@@ -892,7 +899,7 @@ TEST_F(PtShareTest, MadviseRemoveIsolation) {
     waitpid(pid, &status, 0);
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
     std::cout << "[ OK   ] Madvise(MADV_REMOVE) global effect verified." << std::endl;
 }
 
@@ -905,11 +912,11 @@ TEST_F(PtShareTest, GuardInstallSharedPTFailure) {
     std::cout << "[ INFO ] Starting GuardInstallSharedPTFailure test..." << std::endl;
     void* addr = (void*)0x610000000000;
     // Map with MAP_SHARED_PT
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     std::cout << "[ INFO ] Attempting MADV_GUARD_INSTALL on shared PT VMA..." << std::endl;
-    int ret = madvise(mapped, PAGE_SIZE, MADV_GUARD_INSTALL);
+    int ret = madvise(mapped, kPageSize, MADV_GUARD_INSTALL);
 
     // Expecting failure with EINVAL because shared PT VMAs are restricted
     EXPECT_EQ(ret, -1);
@@ -921,7 +928,7 @@ TEST_F(PtShareTest, GuardInstallSharedPTFailure) {
         std::cerr << "[ FAIL ] MADV_GUARD_INSTALL did not fail as expected. ret=" << ret << " errno=" << errno << std::endl;
     }
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
 }
 
 #ifndef MADV_GUARD_REMOVE
@@ -933,11 +940,11 @@ TEST_F(PtShareTest, GuardRemoveSharedPTFailure) {
     std::cout << "[ INFO ] Starting GuardRemoveSharedPTFailure test..." << std::endl;
     void* addr = (void*)0x605000000000;
     // Map with MAP_SHARED_PT
-    void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped, MAP_FAILED);
 
     std::cout << "[ INFO ] Attempting MADV_GUARD_REMOVE on shared PT VMA..." << std::endl;
-    int ret = madvise(mapped, PAGE_SIZE, MADV_GUARD_REMOVE);
+    int ret = madvise(mapped, kPageSize, MADV_GUARD_REMOVE);
 
     // Expecting failure with EINVAL because shared PT VMAs are restricted
     EXPECT_EQ(ret, -1);
@@ -949,41 +956,47 @@ TEST_F(PtShareTest, GuardRemoveSharedPTFailure) {
         std::cerr << "[ FAIL ] MADV_GUARD_REMOVE did not fail as expected. ret=" << ret << " errno=" << errno << std::endl;
     }
 
-    ASSERT_EQ(munmap(mapped, PMD_SIZE), 0);
+    ASSERT_EQ(munmap(mapped, kPmdSize), 0);
 }
 
 // Test 30: Multiple Independent Domains Isolation
 TEST_F(PtShareTest, MultipleDomainsIsolation) {
     std::cout << "[ INFO ] Starting MultipleDomainsIsolation test..." << std::endl;
     void* addr = (void*)0x600000000000;
-    int sync_pipe[2];
-    ASSERT_EQ(pipe(sync_pipe), 0);
+    int a_to_p[2], p_to_b[2], p_to_a[2];
+    ASSERT_EQ(pipe(a_to_p), 0);
+    ASSERT_EQ(pipe(p_to_b), 0);
+    ASSERT_EQ(pipe(p_to_a), 0);
 
     // Process A: Create Domain A
     pid_t pid_a = fork();
     if (pid_a == 0) {
-        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        close(a_to_p[0]); close(p_to_b[0]); close(p_to_b[1]); close(p_to_a[1]);
+
+        void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
         if (mapped == MAP_FAILED) {
             perror("mmap A");
             exit(1);
         }
-        
+
         // Populate mapping
         ((char*)mapped)[0] = 'A';
 
         // Signal Parent
-        write(sync_pipe[1], "A", 1);
-        
+        write(a_to_p[1], "A", 1);
+
         // Wait for Parent to allow exit
         char buf;
-        if (read(sync_pipe[0], &buf, 1) <= 0) exit(7);
+        if (read(p_to_a[0], &buf, 1) <= 0) exit(7);
         exit(0);
     }
 
     // Process B: Create Domain B
     pid_t pid_b = fork();
     if (pid_b == 0) {
-        void* mapped = do_mmap(addr, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        close(a_to_p[0]); close(a_to_p[1]); close(p_to_b[1]); close(p_to_a[0]); close(p_to_a[1]);
+
+        void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
         if (mapped == MAP_FAILED) {
             perror("mmap B");
             exit(1);
@@ -991,12 +1004,12 @@ TEST_F(PtShareTest, MultipleDomainsIsolation) {
 
         // Wait for Parent to signal that Process A has populated its mapping
         char buf;
-        if (read(sync_pipe[0], &buf, 1) <= 0) exit(8);
-        
+        if (read(p_to_b[0], &buf, 1) <= 0) exit(8);
+
         // Process B should NOT see 'A' in its page tables yet if they are isolated domains.
         int present = is_page_present(addr);
         if (present == -1) exit(2);
-        
+
         // If they shared page tables, is_page_present would return 1 because A already populated it.
         // Since they have independent page tables, B's page table for 'addr' should be empty.
         if (present == 1) {
@@ -1009,7 +1022,7 @@ TEST_F(PtShareTest, MultipleDomainsIsolation) {
             std::cerr << "Process B saw incorrect value: " << ((char*)mapped)[0] << std::endl;
             exit(4);
         }
-        
+
         // Now B's page table should be populated.
         present = is_page_present(addr);
         if (present != 1) {
@@ -1021,18 +1034,21 @@ TEST_F(PtShareTest, MultipleDomainsIsolation) {
     }
 
     // Parent coordination
+    close(a_to_p[1]); close(p_to_b[0]); close(p_to_a[0]);
+
     char buf;
-    read(sync_pipe[0], &buf, 1); // Wait for A to populate
-    write(sync_pipe[1], "G", 1); // Signal B to check
-    
+    read(a_to_p[0], &buf, 1); // Wait for A to populate
+    write(p_to_b[1], "G", 1); // Signal B to check
+
     int status;
     waitpid(pid_b, &status, 0);
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "Process B failed with status " << WEXITSTATUS(status);
-    
-    write(sync_pipe[1], "K", 1); // Signal A to exit
+
+    write(p_to_a[1], "K", 1); // Signal A to exit
     waitpid(pid_a, &status, 0);
     EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "Process A failed with status " << WEXITSTATUS(status);
 
+    close(a_to_p[0]); close(p_to_b[1]); close(p_to_a[1]);
     std::cout << "[ OK   ] Multiple domains isolation verified." << std::endl;
 }
 
@@ -1043,24 +1059,24 @@ TEST_F(PtShareTest, HierarchyCrossover) {
     void* addr_b = (void*)0x510000000000;
 
     // Zygote A creates Domain A
-    void* mapped_a = do_mmap(addr_a, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+    std::cout << "[ INFO ] Zygote A mapping Domain A..." << std::endl;
+    void* mapped_a = do_mmap(addr_a, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
     ASSERT_NE(mapped_a, MAP_FAILED);
     ((char*)mapped_a)[0] = 'Z';
 
     pid_t pid_app = fork();
     if (pid_app == 0) {
+        std::cout << "[ INFO ] App process started (PID " << getpid() << ")" << std::endl;
         // App process inherits Domain A
         if (((char*)addr_a)[0] != 'Z') {
-            std::cerr << "App saw incorrect value in inherited Domain A" << std::endl;
+            std::cerr << "App saw incorrect value in inherited Domain A: " << ((char*)addr_a)[0] << std::endl;
             exit(1);
         }
+        std::cout << "[ INFO ] App process verified inherited Domain A." << std::endl;
 
         // App process creates its own Domain B
-        // Need a different file for Domain B to be clean, but same test_file is okay if address is different
-        // Actually, ptshare_validate_mmap checks address overlaps in ptshare_mm.
-        // Since Domain A and Domain B have DIFFERENT ptshare_mm, they can use same addresses too.
-        // But for clarity let's use different addresses.
-        void* mapped_b = do_mmap(addr_b, PMD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED);
+        std::cout << "[ INFO ] App process mapping Domain B..." << std::endl;
+        void* mapped_b = do_mmap(addr_b, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED, kPmdSize);
         if (mapped_b == MAP_FAILED) {
             perror("App mmap B");
             exit(2);
@@ -1068,31 +1084,60 @@ TEST_F(PtShareTest, HierarchyCrossover) {
         ((char*)mapped_b)[0] = 'X';
 
         // App process forks App child
+        std::cout << "[ INFO ] App process forking child..." << std::endl;
+        fflush(stdout); fflush(stderr);
         pid_t pid_child = fork();
         if (pid_child == 0) {
+            std::cout << "[ INFO ] App child process started (PID " << getpid() << ")" << std::endl;
             // App child inherits both Domain A and Domain B
-            if (((char*)addr_a)[0] != 'Z') exit(3);
-            if (((char*)addr_b)[0] != 'X') exit(4);
-            
+            if (((char*)addr_a)[0] != 'Z') {
+                std::cerr << "App child saw incorrect value in Domain A: " << ((char*)addr_a)[0] << std::endl;
+                exit(3);
+            }
+            if (((char*)addr_b)[0] != 'X') {
+                std::cerr << "App child saw incorrect value in Domain B: " << ((char*)addr_b)[0] << std::endl;
+                exit(4);
+            }
+
             // Verify sharing in Domain B
             ((char*)addr_b)[0] = 'Y';
+            std::cout << "[ INFO ] App child verified sharing in Domain B." << std::endl;
             exit(0);
         }
         int status;
         waitpid(pid_child, &status, 0);
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) exit(5);
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+             if (WIFEXITED(status))
+                 std::cerr << "App child failed with status " << WEXITSTATUS(status) << std::endl;
+             else if (WIFSIGNALED(status))
+                 std::cerr << "App child killed by signal " << WTERMSIG(status) << std::endl;
+             else
+                 std::cerr << "App child failed mysteriously" << std::endl;
+             exit(5);
+        }
 
         // Verify sharing from child in Domain B
-        if (((char*)addr_b)[0] != 'Y') exit(6);
-        
+        if (((char*)addr_b)[0] != 'Y') {
+            std::cerr << "App process saw incorrect value in Domain B after child write: " << ((char*)addr_b)[0] << std::endl;
+            exit(6);
+        }
+        std::cout << "[ INFO ] App process verified child's write in Domain B." << std::endl;
+
         exit(0);
     }
 
     int status;
+    std::cout << "[ INFO ] Parent waiting for App process..." << std::endl;
     waitpid(pid_app, &status, 0);
-    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "App process failed with status " << WEXITSTATUS(status);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+         if (WIFEXITED(status))
+             std::cerr << "App process failed with status " << WEXITSTATUS(status) << std::endl;
+         else if (WIFSIGNALED(status))
+             std::cerr << "App process killed by signal " << WTERMSIG(status) << std::endl;
+    }
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
-    munmap(mapped_a, PMD_SIZE);
+    munmap(mapped_a, kPmdSize);
     std::cout << "[ OK   ] Hierarchy crossover verified." << std::endl;
 }
 
@@ -1118,7 +1163,7 @@ TEST_F(PtShareTest, PageTableEfficiency) {
     std::cout << "[ INFO ] Starting PageTableEfficiency test..." << std::endl;
     const int num_procs = 50;
     const int num_pmds = 500; // 1GB mapping
-    const size_t total_size = (size_t)num_pmds * PMD_SIZE;
+    const size_t total_size = (size_t)num_pmds * kPmdSize;
     void* addr = (void*)0x600000000000;
 
     auto run_experiment = [&](bool use_shpt) -> long {
@@ -1144,7 +1189,7 @@ TEST_F(PtShareTest, PageTableEfficiency) {
                     signal(SIGTERM, [](int){ _exit(0); });
                     // Children access all PMDs to ensure PTEs are present
                     for (size_t j = 0; j < num_pmds; j++) {
-                        if (((char*)mapped)[j * PMD_SIZE] != 0) _exit(2);
+                        if (((char*)mapped)[j * kPmdSize] != 0) _exit(2);
                     }
 
                     // Signal this child is done via a dedicated file
