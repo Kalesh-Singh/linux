@@ -75,6 +75,9 @@ static void vm_area_init_from(const struct vm_area_struct *src,
 #ifdef __HAVE_PFNMAP_TRACKING
 	dest->pfnmap_track_ctx = NULL;
 #endif
+#ifdef CONFIG_PTSHARE
+	dest->vm_ptshare = src->vm_ptshare;
+#endif
 }
 
 #ifdef __HAVE_PFNMAP_TRACKING

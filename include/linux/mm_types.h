@@ -1056,6 +1056,12 @@ struct vm_area_struct {
 #ifdef __HAVE_PFNMAP_TRACKING
 	struct pfnmap_track_ctx *pfnmap_track_ctx;
 #endif
+#ifdef CONFIG_PTSHARE
+	union {
+		struct ptshare_desc *vm_ptshare; /* For client VMAs: pointer to domain */
+		refcount_t vm_ptshare_refcount;  /* For shadow VMAs: number of clients */
+	};
+#endif
 } __randomize_layout;
 
 /* Clears all bits in the VMA flags bitmap, non-atomically. */

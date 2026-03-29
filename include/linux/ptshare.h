@@ -23,6 +23,30 @@ static inline bool vma_shares_pagetables(const struct vm_area_struct *vma)
 	return vma->vm_flags & VM_PT_SHARED;
 }
 
+/* For client VMAs */
+static inline struct ptshare_desc *vma_ptshare(struct vm_area_struct *vma)
+{
+#ifdef CONFIG_PTSHARE
+	/*
+	 * Shadow VMAs belong to a ptshare_mm, which we can identify.
+	 * Client VMAs are those that have VM_PT_SHARED set.
+	 */
+	if (vma_shares_pagetables(vma))
+		return vma->vm_ptshare;
+#endif
+	return NULL;
+}
+
+/* For shadow VMAs */
+static inline refcount_t *vma_ptshare_refcount(struct vm_area_struct *vma)
+{
+#ifdef CONFIG_PTSHARE
+	/* Shadow VMAs are in a ptshare_mm and do NOT have VM_PT_SHARED set */
+	return &vma->vm_ptshare_refcount;
+#endif
+	return NULL;
+}
+
 /**
  * ptdesc_get - Increment reference count on a page table descriptor
  * @pt: The page table descriptor.
