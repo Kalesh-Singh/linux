@@ -24,7 +24,7 @@ static inline void ptshare_remove_vma(struct vm_area_struct *vma)
 	struct mm_struct *ptshare_mm = desc->ptshare_mm;
 
 	/* Destroy the shadow VMA in ptshare_mm */
-	mmap_write_lock_nested(ptshare_mm, SINGLE_DEPTH_NESTING);
+	mmap_write_lock_nested(ptshare_mm, PTSHARE_MMAP_LOCK_NESTING);
 	BUG_ON(do_munmap(ptshare_mm, vma->vm_start, vma->vm_end - vma->vm_start, NULL));
 	mmap_write_unlock(ptshare_mm);
 }
@@ -44,7 +44,7 @@ void ptshare_get_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
 	unsigned long addr = vma->vm_start;
 	struct vm_area_struct *shadow_vma;
 
-	mmap_read_lock_nested(desc->ptshare_mm, SINGLE_DEPTH_NESTING);
+	mmap_read_lock_nested(desc->ptshare_mm, PTSHARE_MMAP_LOCK_NESTING);
 	shadow_vma = vma_lookup(desc->ptshare_mm, addr);
 	BUG_ON(!shadow_vma);
 	refcount_inc(vma_ptshare_refcount(shadow_vma));
@@ -75,7 +75,7 @@ void ptshare_put_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
 	struct vm_area_struct *shadow_vma;
 	bool should_remove = false;
 
-	mmap_read_lock_nested(desc->ptshare_mm, SINGLE_DEPTH_NESTING);
+	mmap_read_lock_nested(desc->ptshare_mm, PTSHARE_MMAP_LOCK_NESTING);
 	shadow_vma = vma_lookup(desc->ptshare_mm, addr);
 	BUG_ON(!shadow_vma);
 

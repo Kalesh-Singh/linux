@@ -116,10 +116,10 @@ struct ptshare_desc *ptshare_alloc_desc(void)
 	desc->mmu_notifier.ops = &ptshare_mmu_notifier_ops;
 
 	/*
-	 * Use the nested lock to avoid lockdep warnings when called
-	 * from do_mmap while already holding the current mm's mmap_lock.
+	 * Use a dedicated nesting subclass to avoid lockdep warnings when
+	 * nested under other MM locks (e.g. during fork/dup_mmap).
 	 */
-	mmap_write_lock_nested(desc->ptshare_mm, SINGLE_DEPTH_NESTING);
+	mmap_write_lock_nested(desc->ptshare_mm, PTSHARE_MMAP_LOCK_NESTING);
 	if (__mmu_notifier_register(&desc->mmu_notifier, desc->ptshare_mm)) {
 		mmap_write_unlock(desc->ptshare_mm);
 		mmput(desc->ptshare_mm);
@@ -206,7 +206,7 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 	 * must have a unique virtual address across all participating
 	 * processes.
 	 */
-	mmap_read_lock_nested(desc->ptshare_mm, SINGLE_DEPTH_NESTING);
+	mmap_read_lock_nested(desc->ptshare_mm, PTSHARE_MMAP_LOCK_NESTING);
 	vma = find_vma_intersection(desc->ptshare_mm, addr, addr + len);
 	mmap_read_unlock(desc->ptshare_mm);
 
@@ -270,7 +270,7 @@ static inline int __ptshare_install_vma(struct vm_area_struct *vma)
 	int ret = 0;
 
 	mmap_assert_write_locked(vma->vm_mm);
-	mmap_write_lock_nested(ptshare_mm, SINGLE_DEPTH_NESTING);
+	mmap_write_lock_nested(ptshare_mm, PTSHARE_MMAP_LOCK_NESTING);
 
 	/* Re-check for overlap while holding the write lock */
 	ptshare_vma = find_vma_intersection(ptshare_mm, addr, addr + len);
@@ -403,7 +403,7 @@ vm_fault_t ptshare_handle_mm_fault(struct vm_fault *vmf)
 		 * while already holding the faulting process's lock.
 		 */
 		ptshare_vma = lock_mm_and_find_vma_nested(ptshare_mm, vmf->address,
-							NULL, SINGLE_DEPTH_NESTING);
+							NULL, PTSHARE_MMAP_LOCK_NESTING);
 		if (!ptshare_vma)
 			return VM_FAULT_SIGSEGV;
 	} else {

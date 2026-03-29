@@ -6,6 +6,16 @@
 #include <linux/mm.h>
 #include <linux/mmu_notifier.h>
 
+/*
+ * Use a unique lockdep subclass for ptshare_mm->mmap_lock to allow
+ * nesting it under other MM locks (e.g. during fork/dup_mmap).
+ *
+ * 0: Default (Parent MM in dup_mmap)
+ * 1: SINGLE_DEPTH_NESTING (Child MM in dup_mmap)
+ * 2: PTSHARE_MMAP_LOCK_NESTING (ptshare_mm)
+ */
+#define PTSHARE_MMAP_LOCK_NESTING 2
+
 struct ptshare_desc {
 	struct mm_struct *ptshare_mm;		/* The headless shadow MM for this domain */
 	struct mmu_notifier mmu_notifier;	/* Notifier for TLB consistency */
