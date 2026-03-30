@@ -917,6 +917,13 @@ struct vm_area_struct {
 #ifdef __HAVE_PFNMAP_TRACKING
 	struct pfnmap_track_ctx *pfnmap_track_ctx;
 #endif
+#ifdef CONFIG_PTSHARE
+	union {
+		/* For client VMAs: pointer to domain */
+		struct ptshare_desc *__vm_ptshare_desc;
+		refcount_t __vm_ptshare_refcount;  /* For shadow VMAs: number of clients */
+	};
+#endif
 } __randomize_layout;
 
 #ifdef CONFIG_NUMA
