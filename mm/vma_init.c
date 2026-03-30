@@ -8,6 +8,8 @@
 #include "vma_internal.h"
 #include "vma.h"
 
+#include <linux/ptshare.h>
+
 /* SLAB cache for vm_area_struct structures */
 static struct kmem_cache *vm_area_cachep;
 
@@ -74,6 +76,10 @@ static void vm_area_init_from(const struct vm_area_struct *src,
 #endif
 #ifdef __HAVE_PFNMAP_TRACKING
 	dest->pfnmap_track_ctx = NULL;
+#endif
+#ifdef CONFIG_PTSHARE
+	if (vma_shares_pagetables(dest))
+		vma_set_ptshare_desc(dest, vma_ptshare_desc(src));
 #endif
 }
 

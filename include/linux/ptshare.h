@@ -22,4 +22,48 @@ static inline bool has_map_hugetlb_flag(unsigned long flags)
 	return flags & MAP_HUGETLB && !IS_ENABLED(CONFIG_PTSHARE);
 }
 
+#ifdef CONFIG_PTSHARE
+static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
+{
+	/*
+	 * Shadow VMAs belong to a ptshare_mm, and do NOT have VM_PT_SHARED set.
+	 * Client VMAs are those that have VM_PT_SHARED set.
+	 */
+	BUG_ON(!vma_shares_pagetables(vma));
+
+	return vma->__vm_ptshare_desc;
+}
+
+static inline void vma_set_ptshare_desc(struct vm_area_struct *vma,
+					struct ptshare_desc *desc)
+{
+	BUG_ON(!vma_shares_pagetables(vma));
+
+	vma->__vm_ptshare_desc = desc;
+}
+
+static inline refcount_t *vma_ptshare_refcount(struct vm_area_struct *vma)
+{
+	/* Shadow VMAs are in a ptshare_mm and do NOT have VM_PT_SHARED set */
+	BUG_ON(vma_shares_pagetables(vma));
+
+	return &vma->__vm_ptshare_refcount;
+}
+#else /* !CONFIG_PTSHARE */
+static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
+{
+	return NULL;
+}
+
+static inline void vma_set_ptshare_desc(struct vm_area_struct *vma,
+					struct ptshare_desc *desc)
+{
+}
+
+static inline refcount_t *vma_ptshare_refcount(struct vm_area_struct *vma)
+{
+	return NULL;
+}
+#endif /* CONFIG_PTSHARE */
+
 #endif /* _LINUX_PTSHARE_H */
