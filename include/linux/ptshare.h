@@ -61,6 +61,10 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 			  unsigned long len, unsigned long prot,
 			  unsigned long flags, vm_flags_t vm_flags,
 			  unsigned long pgoff);
+
+void ptshare_get_vma(struct vm_area_struct *vma, struct ptshare_desc *desc);
+
+void ptshare_put_vma(struct vm_area_struct *vma, struct ptshare_desc *desc);
 #else /* !CONFIG_PTSHARE */
 static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
 {
@@ -96,6 +100,16 @@ static inline int ptshare_validate_mmap(struct file *file, unsigned long addr,
 					unsigned long pgoff)
 {
 	return 0;
+}
+
+static inline void ptshare_get_vma(struct vm_area_struct *vma,
+					struct ptshare_desc *desc)
+{
+}
+
+static inline void ptshare_put_vma(struct vm_area_struct *vma,
+					struct ptshare_desc *desc)
+{
 }
 #endif /* CONFIG_PTSHARE */
 

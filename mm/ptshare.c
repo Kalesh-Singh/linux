@@ -165,3 +165,66 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 
 	return ret;
 }
+
+static inline void ptshare_remove_vma(struct vm_area_struct *vma,
+				      struct ptshare_desc *desc)
+{
+	struct mm_struct *ptshare_mm = desc->ptshare_mm;
+
+	/* Destroy the shadow VMA in ptshare_mm */
+	mmap_write_lock(ptshare_mm);
+	BUG_ON(do_munmap(ptshare_mm, vma->vm_start, vma->vm_end - vma->vm_start, NULL));
+	mmap_write_unlock(ptshare_mm);
+}
+
+void ptshare_get_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
+{
+	unsigned long addr = vma->vm_start;
+	struct vm_area_struct *shadow_vma;
+
+	mmap_read_lock(desc->ptshare_mm);
+	shadow_vma = vma_lookup(desc->ptshare_mm, addr);
+	BUG_ON(!shadow_vma);
+	refcount_inc(vma_ptshare_refcount(shadow_vma));
+	mmap_read_unlock(desc->ptshare_mm);
+}
+
+/**
+ * ptshare_put_vma - Release a reference to a shared VMA.
+ * @vma: The guest VMA.
+ * @desc: The shared page table descriptor.
+ *
+ * This function implements a decoupled locking protocol to safely manage
+ * the lifecycle of shared VMAs:
+ *
+ * 1. Exclusive Ownership: If the reference count drops to zero, the current
+ *    thread acquires exclusive responsibility for destroying the shadow VMA.
+ * 2. Decoupled Destruction: It is safe to perform the high-latency unmapping
+ *    operations using the shadow MM's mmap_lock (see below).
+ * 3. Collision Prevention: During the window between refcount drop and
+ *    the final do_munmap(), any concurrent attempt to install an overlapping
+ *    shared VMA will be rejected by ptshare_validate_mmap() because the
+ *    VMA remains in the shadow MM tree until the unmap completes.
+ *
+ * Note: Since the refcount is atomic, we can potentially optimize this
+ * by using per-VMA read locks for lookups and refcount manipulation.
+ * This is left for a subsequent optimization.
+ */
+void ptshare_put_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
+{
+	unsigned long addr = vma->vm_start;
+	struct vm_area_struct *shadow_vma;
+	bool should_remove = false;
+
+	mmap_read_lock(desc->ptshare_mm);
+	shadow_vma = vma_lookup(desc->ptshare_mm, addr);
+	BUG_ON(!shadow_vma);
+
+	if (refcount_dec_and_test(vma_ptshare_refcount(shadow_vma)))
+		should_remove = true;
+
+	mmap_read_unlock(desc->ptshare_mm);
+
+	if (should_remove)
+		ptshare_remove_vma(vma, desc);
+}
