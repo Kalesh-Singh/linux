@@ -11,3 +11,53 @@
  * Author: Kalesh Singh <kaleshsingh@google.com>
  */
 #include <linux/ptshare.h>
+#include <linux/slab.h>
+#include <linux/sched/mm.h>
+
+struct ptshare_desc *ptshare_alloc_desc(void)
+{
+	struct ptshare_desc *desc;
+
+	desc = kzalloc(sizeof(struct ptshare_desc), GFP_KERNEL);
+	if (!desc)
+		return NULL;
+
+	desc->ptshare_mm = mm_alloc();
+	if (!desc->ptshare_mm) {
+		kfree(desc);
+		return NULL;
+	}
+
+	refcount_set(&desc->refcount, 1);
+
+	return desc;
+}
+
+/*
+ * Once the descriptor's refcount reaches zero, the current thread
+ * has exclusive ownership. This occurs either because:
+ * 1. The original owning process (the only one capable of creating
+ *    new VMAs in this domain) has exited.
+ * 2. The last VMA using this domain has been destroyed. Since VMAs
+ *    are the only path for other processes to join the domain (e.g.,
+ *    via fork inheritance), no new references can be created.
+ *
+ * Therefore, no further synchronization is needed while we tear down
+ * the internal state.
+ */
+static void ptshare_free_desc(struct ptshare_desc *desc)
+{
+	mmput(desc->ptshare_mm);
+	kfree(desc);
+}
+
+void ptshare_put_desc(struct ptshare_desc *desc)
+{
+	if (refcount_dec_and_test(&desc->refcount))
+		ptshare_free_desc(desc);
+}
+
+void ptshare_get_desc(struct ptshare_desc *desc)
+{
+	refcount_inc(&desc->refcount);
+}
