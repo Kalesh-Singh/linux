@@ -49,6 +49,12 @@ static inline refcount_t *vma_ptshare_refcount(struct vm_area_struct *vma)
 
 	return &vma->__vm_ptshare_refcount;
 }
+
+struct ptshare_desc *ptshare_alloc_desc(void);
+
+void ptshare_put_desc(struct ptshare_desc *desc);
+
+void ptshare_get_desc(struct ptshare_desc *desc);
 #else /* !CONFIG_PTSHARE */
 static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
 {
@@ -63,6 +69,19 @@ static inline void vma_set_ptshare_desc(struct vm_area_struct *vma,
 static inline refcount_t *vma_ptshare_refcount(struct vm_area_struct *vma)
 {
 	return NULL;
+}
+
+static inline struct ptshare_desc *ptshare_alloc_desc(void)
+{
+	return NULL;
+}
+
+static inline void ptshare_put_desc(struct ptshare_desc *desc)
+{
+}
+
+static inline void ptshare_get_desc(struct ptshare_desc *desc)
+{
 }
 #endif /* CONFIG_PTSHARE */
 
