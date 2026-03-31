@@ -64,6 +64,9 @@ static void ptshare_free_desc(struct ptshare_desc *desc)
 
 void ptshare_put_desc(struct ptshare_desc *desc)
 {
+	if (!desc)
+		return;
+
 	if (refcount_dec_and_test(&desc->refcount))
 		ptshare_free_desc(desc);
 }
@@ -123,8 +126,22 @@ int ptshare_validate_mmap(struct file *file, unsigned long addr,
 		return -EINVAL;
 
 	desc = current->mm->ptshare_desc;
-	if (!desc)
+	if (!desc) {
+		/*
+		 * If the caller doesn't have a ptshare_desc, allocate it now.
+		 */
+		desc = ptshare_alloc_desc();
+		if (!desc)
+			return -ENOMEM;
+
+		current->mm->ptshare_desc = desc;
+
+		/*
+		 * Since we were not previously part of any shared page table
+		 * domain, we can allow the mapping without further checks.
+		 */
 		return 0;
+	}
 
 	/* The shared MM should never be the caller of this syscall */
 	BUG_ON(current->mm == desc->ptshare_mm);
