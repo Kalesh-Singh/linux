@@ -182,6 +182,8 @@ void ptshare_get_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
 	unsigned long addr = vma->vm_start;
 	struct vm_area_struct *shadow_vma;
 
+	ptshare_get_desc(desc);
+
 	mmap_read_lock(desc->ptshare_mm);
 	shadow_vma = vma_lookup(desc->ptshare_mm, addr);
 	BUG_ON(!shadow_vma);
@@ -227,4 +229,6 @@ void ptshare_put_vma(struct vm_area_struct *vma, struct ptshare_desc *desc)
 
 	if (should_remove)
 		ptshare_remove_vma(vma, desc);
+
+	ptshare_put_desc(desc);
 }
