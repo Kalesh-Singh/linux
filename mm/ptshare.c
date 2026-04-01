@@ -11,8 +11,17 @@
  * Author: Kalesh Singh <kaleshsingh@google.com>
  */
 #include <linux/ptshare.h>
+
+#include <linux/mmap_lock.h>
 #include <linux/slab.h>
 #include <linux/sched/mm.h>
+
+static inline void mmap_lock_set_ptshare_class(struct mm_struct *mm)
+{
+	static struct lock_class_key ptshare_mmap_lock_key;
+
+	lockdep_set_class(&mm->mmap_lock, &ptshare_mmap_lock_key);
+}
 
 struct ptshare_desc *ptshare_alloc_desc(void)
 {
@@ -27,6 +36,8 @@ struct ptshare_desc *ptshare_alloc_desc(void)
 		kfree(desc);
 		return NULL;
 	}
+
+	mmap_lock_set_ptshare_class(desc->ptshare_mm);
 
 	refcount_set(&desc->refcount, 1);
 
