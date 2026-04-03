@@ -8,6 +8,7 @@
 #include <linux/seq_file.h>
 #include <linux/highmem.h>
 #include <linux/ptrace.h>
+#include <linux/ptshare.h>
 #include <linux/slab.h>
 #include <linux/pagemap.h>
 #include <linux/mempolicy.h>
@@ -39,9 +40,9 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 	unsigned long text, lib, swap, anon, file, shmem;
 	unsigned long hiwater_vm, total_vm, hiwater_rss, total_rss;
 
-	anon = get_mm_counter_sum(mm, MM_ANONPAGES);
-	file = get_mm_counter_sum(mm, MM_FILEPAGES);
-	shmem = get_mm_counter_sum(mm, MM_SHMEMPAGES);
+	anon = ptshare_get_mm_counter_sum(mm, MM_ANONPAGES);
+	file = ptshare_get_mm_counter_sum(mm, MM_FILEPAGES);
+	shmem = ptshare_get_mm_counter_sum(mm, MM_SHMEMPAGES);
 
 	/*
 	 * Note: to minimize their overhead, mm maintains hiwater_vm and
@@ -95,12 +96,12 @@ unsigned long task_statm(struct mm_struct *mm,
 			 unsigned long *shared, unsigned long *text,
 			 unsigned long *data, unsigned long *resident)
 {
-	*shared = get_mm_counter_sum(mm, MM_FILEPAGES) +
-			get_mm_counter_sum(mm, MM_SHMEMPAGES);
+	*shared = ptshare_get_mm_counter_sum(mm, MM_FILEPAGES) +
+			ptshare_get_mm_counter_sum(mm, MM_SHMEMPAGES);
 	*text = (PAGE_ALIGN(mm->end_code) - (mm->start_code & PAGE_MASK))
 								>> PAGE_SHIFT;
 	*data = mm->data_vm + mm->stack_vm;
-	*resident = *shared + get_mm_counter_sum(mm, MM_ANONPAGES);
+	*resident = *shared + ptshare_get_mm_counter_sum(mm, MM_ANONPAGES);
 	return mm->total_vm;
 }
 
