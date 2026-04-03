@@ -8,6 +8,7 @@
 #include <linux/types.h>
 #include <linux/tracepoint.h>
 #include <trace/events/mmflags.h>
+#include <linux/ptshare.h>
 
 TRACE_EVENT(kmem_cache_alloc,
 
@@ -442,7 +443,7 @@ TRACE_EVENT(rss_stat,
 		__entry->mm_id = mm_ptr_to_hash(mm);
 		__entry->curr = !!(current->mm == mm);
 		__entry->member = member;
-		__entry->size = (percpu_counter_sum_positive(&mm->rss_stat[member])
+		__entry->size = (ptshare_get_mm_counter_sum(mm, member)
 							    << PAGE_SHIFT);
 	),
 
