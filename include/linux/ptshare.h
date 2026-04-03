@@ -105,6 +105,28 @@ bool ptshare_free_pte_range(pgtable_t ptdesc);
 int ptshare_unshare_vma_locked(struct vm_area_struct *vma);
 
 int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma, int mmap_locked);
+
+static inline unsigned long ptshare_get_mm_counter(struct mm_struct *mm,
+							int member)
+{
+	unsigned long sum = get_mm_counter(mm, member);
+
+	if (mm->ptshare_desc)
+		sum += get_mm_counter(mm->ptshare_desc->ptshare_mm, member);
+
+	return sum;
+}
+
+static inline unsigned long ptshare_get_mm_counter_sum(struct mm_struct *mm,
+							int member)
+{
+	unsigned long sum = get_mm_counter_sum(mm, member);
+
+	if (mm->ptshare_desc)
+		sum += get_mm_counter_sum(mm->ptshare_desc->ptshare_mm, member);
+
+	return sum;
+}
 #else /* !CONFIG_PTSHARE */
 static inline struct ptshare_desc *vma_ptshare_desc(const struct vm_area_struct *vma)
 {
@@ -182,6 +204,18 @@ static inline int ptshare_unshare_vma_on_gup(struct vm_area_struct *vma,
 						int mmap_locked)
 {
 	return 0;
+}
+
+static inline unsigned long ptshare_get_mm_counter(struct mm_struct *mm,
+							int member)
+{
+	return  get_mm_counter(mm, member);
+}
+
+static inline unsigned long ptshare_get_mm_counter_sum(struct mm_struct *mm,
+							int member)
+{
+	return get_mm_counter_sum(mm, member);
 }
 #endif /* CONFIG_PTSHARE */
 
