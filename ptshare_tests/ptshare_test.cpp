@@ -117,13 +117,15 @@ TEST_F(PtShareTest, RmapReclaim) {
     ASSERT_EQ(pipe(sync_pipe_p2c), 0);
     ASSERT_EQ(pipe(sync_pipe_c2p), 0);
 
+    // Map in parent BEFORE fork so the child inherits the domain
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
     pid_t pid = fork();
     if (pid == 0) {
         // Child process
         close(sync_pipe_p2c[1]);
         close(sync_pipe_c2p[0]);
-        void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
-        if (mapped == MAP_FAILED) exit(1);
 
         // Ensure page is resident
         ((char*)mapped)[0] = 'X';
@@ -134,12 +136,9 @@ TEST_F(PtShareTest, RmapReclaim) {
 
         // Wait for parent to trigger reclaim
         char buf;
-        if (read(sync_pipe_p2c[0], &buf, 1) <= 0) {
-            exit(4);
-        }
+        if (read(sync_pipe_p2c[0], &buf, 1) <= 0) exit(4);
 
         // Verify page is gone (unmapped via global broadcast)
-        // Note: is_page_present uses /proc/self/pagemap which is accurate
         if (is_page_present(addr) != 0) {
             std::cerr << "Child still sees the page as resident after reclaim!" << std::endl;
             exit(3);
@@ -150,12 +149,13 @@ TEST_F(PtShareTest, RmapReclaim) {
 
     close(sync_pipe_p2c[0]);
     close(sync_pipe_c2p[1]);
-    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
-    ASSERT_NE(mapped, MAP_FAILED);
 
     // Wait for child to populate
     char buf;
     ASSERT_EQ(read(sync_pipe_c2p[0], &buf, 1), 1);
+
+    // Parent must fault to splice the shared page table
+    (void)((volatile char*)mapped)[0];
 
     // Verify page is present in parent too (shared page tables)
     ASSERT_EQ(is_page_present(addr), 1);
