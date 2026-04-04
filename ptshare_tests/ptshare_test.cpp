@@ -16,6 +16,10 @@
 #define MAP_SHARED_PT MAP_HUGETLB
 #endif
 
+#ifndef MADV_PAGEOUT
+#define MADV_PAGEOUT 21
+#endif
+
 static const size_t kPageSize = getpagesize();
 /*
  * Generic PMD size calculation:
@@ -102,6 +106,78 @@ TEST_F(PtShareTest, RSSAccounting) {
     // Expect RSS File to return to roughly original levels
     EXPECT_LE(after.rss_file, before.rss_file + 64); // Allow some small noise
     std::cout << "[ OK   ] RSSAccounting test completed." << std::endl;
+}
+
+// Test 1c: Verify rmap skip and global unmap via MADV_PAGEOUT
+TEST_F(PtShareTest, RmapReclaim) {
+    std::cout << "[ INFO ] Starting RmapReclaim test..." << std::endl;
+    void* addr = (void*)0x700000000000;
+    int sync_pipe_p2c[2];
+    int sync_pipe_c2p[2];
+    ASSERT_EQ(pipe(sync_pipe_p2c), 0);
+    ASSERT_EQ(pipe(sync_pipe_c2p), 0);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child process
+        close(sync_pipe_p2c[1]);
+        close(sync_pipe_c2p[0]);
+        void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
+        if (mapped == MAP_FAILED) exit(1);
+
+        // Ensure page is resident
+        ((char*)mapped)[0] = 'X';
+        if (is_page_present(addr) != 1) exit(2);
+
+        // Signal parent that we are ready
+        write(sync_pipe_c2p[1], "R", 1);
+
+        // Wait for parent to trigger reclaim
+        char buf;
+        if (read(sync_pipe_p2c[0], &buf, 1) <= 0) {
+            exit(4);
+        }
+
+        // Verify page is gone (unmapped via global broadcast)
+        // Note: is_page_present uses /proc/self/pagemap which is accurate
+        if (is_page_present(addr) != 0) {
+            std::cerr << "Child still sees the page as resident after reclaim!" << std::endl;
+            exit(3);
+        }
+
+        exit(0);
+    }
+
+    close(sync_pipe_p2c[0]);
+    close(sync_pipe_c2p[1]);
+    void* mapped = do_mmap(addr, kPmdSize, PROT_READ | PROT_WRITE, MAP_SHARED);
+    ASSERT_NE(mapped, MAP_FAILED);
+
+    // Wait for child to populate
+    char buf;
+    ASSERT_EQ(read(sync_pipe_c2p[0], &buf, 1), 1);
+
+    // Verify page is present in parent too (shared page tables)
+    ASSERT_EQ(is_page_present(addr), 1);
+    ASSERT_EQ(((char*)mapped)[0], 'X');
+
+    std::cout << "[ INFO ] Triggering MADV_PAGEOUT on shared mapping in parent..." << std::endl;
+    // This should trigger rmap walk, skip parent/child VMAs, find shadow VMA,
+    // unmap it, and broadcast TLB flush.
+    ASSERT_EQ(madvise(addr, kPageSize, MADV_PAGEOUT), 0) << "madvise failed: " << strerror(errno);
+
+    // Verify page is gone from parent
+    EXPECT_EQ(is_page_present(addr), 0);
+
+    // Signal child to check and exit
+    write(sync_pipe_p2c[1], "G", 1);
+
+    int status;
+    waitpid(pid, &status, 0);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "Child failed with status " << WEXITSTATUS(status);
+
+    munmap(mapped, kPmdSize);
+    std::cout << "[ OK   ] RmapReclaim test completed successfully." << std::endl;
 }
 
 // Test 2: Invalid alignment (address) should fail
