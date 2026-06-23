@@ -16,6 +16,7 @@
 #include <linux/migrate.h>
 #include <linux/export.h>
 #include <linux/swap.h>
+#include <linux/ppps.h>
 #include <linux/leafops.h>
 #include <linux/pagemap.h>
 #include <linux/buffer_head.h>
@@ -378,6 +379,7 @@ static bool remove_migration_pte(struct folio *folio,
 
 		folio_get(folio);
 		pte = mk_pte(new, READ_ONCE(vma->vm_page_prot));
+		pte = ppps_folio_mk_pte_slice(vma, folio, pte, pvmw.address);
 
 		entry = softleaf_from_pte(old_pte);
 		if (!softleaf_is_migration_young(entry))
