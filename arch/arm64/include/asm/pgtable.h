@@ -40,6 +40,7 @@
 #include <linux/mm_types.h>
 #include <linux/sched.h>
 #include <linux/page_table_check.h>
+#include <linux/ppps.h>
 
 static inline void emit_pte_barriers(void)
 {
@@ -115,7 +116,7 @@ static inline void arch_leave_lazy_mmu_mode(void)
 static inline phys_addr_t __pte_to_phys(pte_t pte)
 {
 	pte_val(pte) &= ~PTE_MAYBE_SHARED;
-	return (pte_val(pte) & PTE_ADDR_LOW) |
+	return (pte_val(pte) & PTE_ADDR_LOW_COMPAT) |
 		((pte_val(pte) & PTE_ADDR_HIGH) << PTE_ADDR_HIGH_SHIFT);
 }
 static inline pteval_t __phys_to_pte_val(phys_addr_t phys)
@@ -125,7 +126,7 @@ static inline pteval_t __phys_to_pte_val(phys_addr_t phys)
 #else
 static inline phys_addr_t __pte_to_phys(pte_t pte)
 {
-	return pte_val(pte) & PTE_ADDR_LOW;
+	return pte_val(pte) & PTE_ADDR_LOW_COMPAT;
 }
 
 static inline pteval_t __phys_to_pte_val(phys_addr_t phys)
@@ -468,6 +469,13 @@ static inline pte_t pte_advance_pfn(pte_t pte, unsigned long nr)
 	return pfn_pte(pte_pfn(pte) + nr, pte_pgprot(pte));
 }
 
+static inline pte_t pte_advance_phys(pte_t pte, unsigned long bytes)
+{
+	phys_addr_t phys = __pte_to_phys(pte);
+
+	return __pte(__phys_to_pte_val(phys + bytes) | pgprot_val(pte_pgprot(pte)));
+}
+
 /*
  * Hugetlb definitions.
  */
@@ -677,21 +685,17 @@ static inline void __set_ptes_anysz(struct mm_struct *mm, unsigned long addr,
 {
 	unsigned long stride = pgsize >> PAGE_SHIFT;
 
-	switch (pgsize) {
-	case PAGE_SIZE:
+	if (pgsize == PAGE_SIZE || pgsize == PAGE_SIZE_COMPAT) {
 		page_table_check_ptes_set(mm, addr, ptep, pte, nr);
-		break;
-	case PMD_SIZE:
+	} else if (pgsize == PMD_SIZE || pgsize == PMD_SIZE_COMPAT) {
 		page_table_check_pmds_set(mm, addr, (pmd_t *)ptep,
 					  pte_pmd(pte), nr);
-		break;
 #ifndef __PAGETABLE_PMD_FOLDED
-	case PUD_SIZE:
+	} else if (pgsize == PUD_SIZE) {
 		page_table_check_puds_set(mm, addr, (pud_t *)ptep,
 					  pte_pud(pte), nr);
-		break;
 #endif
-	default:
+	} else {
 		VM_WARN_ON(1);
 	}
 
@@ -703,7 +707,7 @@ static inline void __set_ptes_anysz(struct mm_struct *mm, unsigned long addr,
 		if (--nr == 0)
 			break;
 		ptep++;
-		pte = pte_advance_pfn(pte, stride);
+		pte = pte_advance_phys(pte, pgsize);
 	}
 
 	__set_pte_complete(pte);
@@ -712,13 +716,13 @@ static inline void __set_ptes_anysz(struct mm_struct *mm, unsigned long addr,
 static inline void __set_ptes(struct mm_struct *mm, unsigned long addr,
 			      pte_t *ptep, pte_t pte, unsigned int nr)
 {
-	__set_ptes_anysz(mm, addr, ptep, pte, nr, PAGE_SIZE);
+	__set_ptes_anysz(mm, addr, ptep, pte, nr, MM_PAGE_SIZE(mm));
 }
 
 static inline void __set_pmds(struct mm_struct *mm, unsigned long addr,
 			      pmd_t *pmdp, pmd_t pmd, unsigned int nr)
 {
-	__set_ptes_anysz(mm, addr, (pte_t *)pmdp, pmd_pte(pmd), nr, PMD_SIZE);
+	__set_ptes_anysz(mm, addr, (pte_t *)pmdp, pmd_pte(pmd), nr, MM_PMD_SIZE(mm));
 }
 #define set_pmd_at(mm, addr, pmdp, pmd) __set_pmds(mm, addr, pmdp, pmd, 1)
 
@@ -999,7 +1003,7 @@ static inline pud_t *p4d_to_folded_pud(p4d_t *p4dp, unsigned long addr)
 	/* Ensure that 'p4dp' indexes a page table according to 'addr' */
 	VM_BUG_ON(((addr >> P4D_SHIFT) ^ ((u64)p4dp >> 3)) % PTRS_PER_P4D);
 
-	return (pud_t *)PTR_ALIGN_DOWN(p4dp, PAGE_SIZE) + pud_index(addr);
+	return (pud_t *)PTR_ALIGN_DOWN(p4dp, MM_ADDR_PAGE_SIZE(addr)) + pud_index(addr);
 }
 
 static inline pud_t *p4d_pgtable(p4d_t p4d)
@@ -1128,7 +1132,7 @@ static inline p4d_t *pgd_to_folded_p4d(pgd_t *pgdp, unsigned long addr)
 	/* Ensure that 'pgdp' indexes a page table according to 'addr' */
 	VM_BUG_ON(((addr >> PGDIR_SHIFT) ^ ((u64)pgdp >> 3)) % PTRS_PER_PGD);
 
-	return (p4d_t *)PTR_ALIGN_DOWN(pgdp, PAGE_SIZE) + p4d_index(addr);
+	return (p4d_t *)PTR_ALIGN_DOWN(pgdp, MM_ADDR_PAGE_SIZE(addr)) + p4d_index(addr);
 }
 
 static inline phys_addr_t p4d_offset_phys(pgd_t *pgdp, unsigned long addr)
@@ -1265,7 +1269,7 @@ static inline int __ptep_set_access_flags(struct vm_area_struct *vma,
 					  pte_t entry, int dirty)
 {
 	return __ptep_set_access_flags_anysz(vma, address, ptep, entry, dirty,
-					     PAGE_SIZE);
+					     MM_PAGE_SIZE(vma->vm_mm));
 }
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
@@ -1360,19 +1364,15 @@ static inline pte_t __ptep_get_and_clear_anysz(struct mm_struct *mm,
 {
 	pte_t pte = __pte(xchg_relaxed(&pte_val(*ptep), 0));
 
-	switch (pgsize) {
-	case PAGE_SIZE:
+	if (pgsize == PAGE_SIZE || pgsize == PAGE_SIZE_COMPAT) {
 		page_table_check_pte_clear(mm, address, pte);
-		break;
-	case PMD_SIZE:
+	} else if (pgsize == PMD_SIZE || pgsize == PMD_SIZE_COMPAT) {
 		page_table_check_pmd_clear(mm, address, pte_pmd(pte));
-		break;
 #ifndef __PAGETABLE_PMD_FOLDED
-	case PUD_SIZE:
+	} else if (pgsize == PUD_SIZE || pgsize == PUD_SIZE_COMPAT) {
 		page_table_check_pud_clear(mm, address, pte_pud(pte));
-		break;
 #endif
-	default:
+	} else {
 		VM_WARN_ON(1);
 	}
 
@@ -1393,7 +1393,7 @@ static inline void __clear_full_ptes(struct mm_struct *mm, unsigned long addr,
 		if (--nr == 0)
 			break;
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += MM_PAGE_SIZE(mm);
 	}
 }
 
@@ -1406,7 +1406,7 @@ static inline pte_t __get_and_clear_full_ptes(struct mm_struct *mm,
 	pte = __ptep_get_and_clear(mm, addr, ptep);
 	while (--nr) {
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += MM_PAGE_SIZE(mm);
 		tmp_pte = __ptep_get_and_clear(mm, addr, ptep);
 		if (pte_dirty(tmp_pte))
 			pte = pte_mkdirty(pte);
@@ -1421,7 +1421,7 @@ static inline pte_t __get_and_clear_full_ptes(struct mm_struct *mm,
 static inline pmd_t pmdp_huge_get_and_clear(struct mm_struct *mm,
 					    unsigned long address, pmd_t *pmdp)
 {
-	return pte_pmd(__ptep_get_and_clear_anysz(mm, address, (pte_t *)pmdp, PMD_SIZE));
+	return pte_pmd(__ptep_get_and_clear_anysz(mm, address, (pte_t *)pmdp, MM_PMD_SIZE(mm)));
 }
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
@@ -1454,7 +1454,7 @@ static inline void __wrprotect_ptes(struct mm_struct *mm, unsigned long address,
 {
 	unsigned int i;
 
-	for (i = 0; i < nr; i++, address += PAGE_SIZE, ptep++)
+	for (i = 0; i < nr; i++, address += MM_PAGE_SIZE(mm), ptep++)
 		__ptep_set_wrprotect(mm, address, ptep);
 }
 
@@ -1494,7 +1494,7 @@ static inline void __clear_young_dirty_ptes(struct vm_area_struct *vma,
 		if (--nr == 0)
 			break;
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += MM_PAGE_SIZE(vma->vm_mm);
 	}
 }
 
