@@ -9,6 +9,7 @@
 #include <linux/page_table_check.h>
 #include <linux/swap.h>
 #include <linux/leafops.h>
+#include <linux/ppps.h>
 
 #undef pr_fmt
 #define pr_fmt(fmt)	"page_table_check: " fmt
@@ -152,7 +153,7 @@ void __page_table_check_pte_clear(struct mm_struct *mm, unsigned long addr,
 		return;
 
 	if (pte_user_accessible_page(mm, addr, pte))
-		page_table_check_clear(pte_pfn(pte), PAGE_SIZE >> PAGE_SHIFT);
+		page_table_check_clear(pte_pfn(pte), 1);
 }
 EXPORT_SYMBOL(__page_table_check_pte_clear);
 
@@ -163,7 +164,7 @@ void __page_table_check_pmd_clear(struct mm_struct *mm, unsigned long addr,
 		return;
 
 	if (pmd_user_accessible_page(mm, addr, pmd))
-		page_table_check_clear(pmd_pfn(pmd), PMD_SIZE >> PAGE_SHIFT);
+		page_table_check_clear(pmd_pfn(pmd), MM_PMD_SIZE(mm) >> PAGE_SHIFT);
 }
 EXPORT_SYMBOL(__page_table_check_pmd_clear);
 
@@ -174,7 +175,7 @@ void __page_table_check_pud_clear(struct mm_struct *mm, unsigned long addr,
 		return;
 
 	if (pud_user_accessible_page(mm, addr, pud))
-		page_table_check_clear(pud_pfn(pud), PUD_SIZE >> PAGE_SHIFT);
+		page_table_check_clear(pud_pfn(pud), MM_PUD_SIZE(mm) >> PAGE_SHIFT);
 }
 EXPORT_SYMBOL(__page_table_check_pud_clear);
 
@@ -201,15 +202,24 @@ void __page_table_check_ptes_set(struct mm_struct *mm, unsigned long addr,
 {
 	unsigned int i;
 
+	unsigned long pgsize = MM_PAGE_SIZE(mm);
+	unsigned long nr_pages = max(1UL, pgsize >> PAGE_SHIFT);
+
 	if (&init_mm == mm)
 		return;
 
 	page_table_check_pte_flags(pte);
 
-	for (i = 0; i < nr; i++)
-		__page_table_check_pte_clear(mm, addr + PAGE_SIZE * i, ptep_get(ptep + i));
-	if (pte_user_accessible_page(mm, addr, pte))
-		page_table_check_set(pte_pfn(pte), nr, pte_write(pte));
+	for (i = 0; i < nr; i++) {
+		unsigned long cur_addr = addr + PAGE_SIZE * i;
+		pte_t old_pte = ptep_get(ptep + i);
+		pte_t new_pte = pte_advance_phys(pte, pgsize * i);
+
+		__page_table_check_pte_clear(mm, cur_addr, old_pte);
+
+		if (pte_user_accessible_page(mm, cur_addr, new_pte))
+			page_table_check_set(pte_pfn(new_pte), nr_pages, pte_write(new_pte));
+	}
 }
 EXPORT_SYMBOL(__page_table_check_ptes_set);
 
@@ -228,7 +238,7 @@ static inline void page_table_check_pmd_flags(pmd_t pmd)
 void __page_table_check_pmds_set(struct mm_struct *mm, unsigned long addr,
 		pmd_t *pmdp, pmd_t pmd, unsigned int nr)
 {
-	unsigned long stride = PMD_SIZE >> PAGE_SHIFT;
+	unsigned long stride = MM_PMD_SIZE(mm) >> PAGE_SHIFT;
 	unsigned int i;
 
 	if (&init_mm == mm)
@@ -237,7 +247,7 @@ void __page_table_check_pmds_set(struct mm_struct *mm, unsigned long addr,
 	page_table_check_pmd_flags(pmd);
 
 	for (i = 0; i < nr; i++)
-		__page_table_check_pmd_clear(mm, addr + PMD_SIZE * i, *(pmdp + i));
+		__page_table_check_pmd_clear(mm, addr + MM_PMD_SIZE(mm) * i, *(pmdp + i));
 	if (pmd_user_accessible_page(mm, addr, pmd))
 		page_table_check_set(pmd_pfn(pmd), stride * nr, pmd_write(pmd));
 }
@@ -246,14 +256,14 @@ EXPORT_SYMBOL(__page_table_check_pmds_set);
 void __page_table_check_puds_set(struct mm_struct *mm, unsigned long addr,
 		pud_t *pudp, pud_t pud,	unsigned int nr)
 {
-	unsigned long stride = PUD_SIZE >> PAGE_SHIFT;
+	unsigned long stride = MM_PUD_SIZE(mm) >> PAGE_SHIFT;
 	unsigned int i;
 
 	if (&init_mm == mm)
 		return;
 
 	for (i = 0; i < nr; i++)
-		__page_table_check_pud_clear(mm, addr + PUD_SIZE * i, *(pudp + i));
+		__page_table_check_pud_clear(mm, addr + MM_PUD_SIZE(mm) * i, *(pudp + i));
 	if (pud_user_accessible_page(mm, addr, pud))
 		page_table_check_set(pud_pfn(pud), stride * nr, pud_write(pud));
 }
@@ -269,14 +279,15 @@ void __page_table_check_pte_clear_range(struct mm_struct *mm,
 	if (!pmd_bad(pmd) && !pmd_leaf(pmd)) {
 		pte_t *ptep = pte_offset_map(&pmd, addr);
 		unsigned long i;
+		unsigned long ptrs = MM_PTRS_PER_PTE(mm);
 
 		if (WARN_ON(!ptep))
 			return;
-		for (i = 0; i < PTRS_PER_PTE; i++) {
+		for (i = 0; i < ptrs; i++) {
 			__page_table_check_pte_clear(mm, addr, ptep_get(ptep));
-			addr += PAGE_SIZE;
+			addr += MM_PAGE_SIZE(mm);
 			ptep++;
 		}
-		pte_unmap(ptep - PTRS_PER_PTE);
+		pte_unmap(ptep - ptrs);
 	}
 }
