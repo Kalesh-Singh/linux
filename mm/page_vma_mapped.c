@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/mm.h>
+#include <linux/ppps.h>
 #include <linux/rmap.h>
 #include <linux/hugetlb.h>
 #include <linux/swap.h>
@@ -177,7 +178,7 @@ static void step_forward(struct page_vma_mapped_walk *pvmw, unsigned long size)
  * If you need to stop the walk before page_vma_mapped_walk() returned false,
  * use page_vma_mapped_walk_done(). It will do the housekeeping.
  */
-bool page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw)
+static bool __page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw)
 {
 	struct vm_area_struct *vma = pvmw->vma;
 	struct mm_struct *mm = vma->vm_mm;
@@ -220,17 +221,17 @@ restart:
 	do {
 		pgd = pgd_offset(mm, pvmw->address);
 		if (!pgd_present(*pgd)) {
-			step_forward(pvmw, PGDIR_SIZE);
+			step_forward(pvmw, MM_PGDIR_SIZE(mm));
 			continue;
 		}
 		p4d = p4d_offset(pgd, pvmw->address);
 		if (!p4d_present(*p4d)) {
-			step_forward(pvmw, P4D_SIZE);
+			step_forward(pvmw, MM_P4D_SIZE(mm));
 			continue;
 		}
 		pud = pud_offset(p4d, pvmw->address);
 		if (!pud_present(*pud)) {
-			step_forward(pvmw, PUD_SIZE);
+			step_forward(pvmw, MM_PUD_SIZE(mm));
 			continue;
 		}
 
@@ -282,7 +283,7 @@ restart:
 			    (pvmw->nr_pages >= HPAGE_PMD_NR))
 				sync_with_folio_pmd_zap(mm, pvmw->pmd);
 
-			step_forward(pvmw, PMD_SIZE);
+			step_forward(pvmw, MM_PMD_SIZE(mm));
 			continue;
 		}
 		if (!map_pte(pvmw, &pmde, &ptl)) {
@@ -295,11 +296,11 @@ this_pte:
 			return true;
 next_pte:
 		do {
-			pvmw->address += PAGE_SIZE;
+			pvmw->address += MM_PAGE_SIZE(mm);
 			if (pvmw->address >= end)
 				return not_found(pvmw);
 			/* Did we cross page table boundary? */
-			if ((pvmw->address & (PMD_SIZE - PAGE_SIZE)) == 0) {
+			if ((pvmw->address & (MM_PMD_SIZE(mm) - MM_PAGE_SIZE(mm))) == 0) {
 				if (pvmw->ptl) {
 					spin_unlock(pvmw->ptl);
 					pvmw->ptl = NULL;
@@ -325,6 +326,21 @@ next_pte:
 	} while (pvmw->address < end);
 
 	return false;
+}
+
+bool page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw)
+{
+	bool ret;
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	struct mm_struct *prev_pgtable_mm = current->pgtable_mm;
+
+	current->pgtable_mm = pvmw->vma->vm_mm;
+#endif
+	ret = __page_vma_mapped_walk(pvmw);
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	current->pgtable_mm = prev_pgtable_mm;
+#endif
+	return ret;
 }
 
 #ifdef CONFIG_MEMORY_FAILURE
