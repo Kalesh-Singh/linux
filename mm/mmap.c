@@ -17,6 +17,7 @@
 #include <linux/shm.h>
 #include <linux/mman.h>
 #include <linux/pagemap.h>
+#include <linux/ppps.h>
 #include <linux/swap.h>
 #include <linux/syscalls.h>
 #include <linux/capability.h>
@@ -1278,6 +1279,7 @@ void exit_mmap(struct mm_struct *mm)
 	VMA_ITERATOR(vmi, mm, 0);
 	struct unmap_desc unmap;
 
+	mm_set_pgtable_mm(mm);
 	/* mm's last user has gone, and its about to be pulled down */
 	mmu_notifier_release(mm);
 
@@ -1324,6 +1326,7 @@ destroy:
 	trace_exit_mmap(mm);
 	mmap_write_unlock(mm);
 	vm_unacct_memory(nr_accounted);
+	mm_clear_pgtable_mm();
 }
 
 /*
