@@ -4356,9 +4356,18 @@ static inline void unmap_mapping_range_tree(struct rb_root_cached *root,
 		start = vma->vm_start + ((start_idx - vma->vm_pgoff) << PAGE_SHIFT);
 		size = (end_idx - start_idx) << PAGE_SHIFT;
 
-		tlb_gather_mmu(&tlb, vma->vm_mm);
-		zap_vma_range_batched(&tlb, vma, start, size, details);
-		tlb_finish_mmu(&tlb);
+		unsigned long end = start + size;
+
+		if (end > vma->vm_end)
+			end = vma->vm_end;
+		if (start < vma->vm_start)
+			start = vma->vm_start;
+
+		if (start < end) {
+			tlb_gather_mmu(&tlb, vma->vm_mm);
+			zap_vma_range_batched(&tlb, vma, start, end - start, details);
+			tlb_finish_mmu(&tlb);
+		}
 	}
 }
 
