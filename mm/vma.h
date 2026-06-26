@@ -132,6 +132,7 @@ struct vma_merge_struct {
 	unsigned long start;
 	unsigned long end;
 	pgoff_t pgoff;
+	unsigned int slice_off;
 
 	union {
 		/* Temporary while VMA flags are being converted. */
