@@ -270,7 +270,7 @@ static inline bool vmg_nomem(struct vma_merge_struct *vmg)
 static inline pgoff_t vma_pgoff_offset(struct vm_area_struct *vma,
 				       unsigned long addr)
 {
-	return vma->vm_pgoff + PHYS_PFN(addr - vma->vm_start);
+	return vma_linear_page_index(vma, addr);
 }
 
 #define VMG_STATE(name, mm_, vmi_, start_, end_, vma_flags_, pgoff_)	\
@@ -281,6 +281,7 @@ static inline pgoff_t vma_pgoff_offset(struct vm_area_struct *vma,
 		.end = end_,						\
 		.vma_flags = vma_flags_,				\
 		.pgoff = pgoff_,					\
+		.slice_off = 0,						\
 		.state = VMA_MERGE_START,				\
 	}
 
@@ -295,6 +296,7 @@ static inline pgoff_t vma_pgoff_offset(struct vm_area_struct *vma,
 		.end = end_,					\
 		.vm_flags = vma_->vm_flags,			\
 		.pgoff = vma_pgoff_offset(vma_, start_),	\
+		.slice_off = vma_slice_offset(vma_, start_),	\
 		.file = vma_->vm_file,				\
 		.anon_vma = vma_->anon_vma,			\
 		.policy = vma_policy(vma_),			\

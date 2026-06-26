@@ -2858,13 +2858,13 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	vma_flags_set_mask(&vma_flags, mm->def_vma_flags);
 
 	vma_flags = ksm_vma_flags(mm, NULL, vma_flags);
-	if (!may_expand_vm(mm, &vma_flags, len >> PAGE_SHIFT))
+	if (!may_expand_vm(mm, &vma_flags, len >> MM_PAGE_SHIFT(mm)))
 		return -ENOMEM;
 
 	if (mm->map_count > get_sysctl_max_map_count())
 		return -ENOMEM;
 
-	if (security_vm_enough_memory_mm(mm, len >> PAGE_SHIFT))
+	if (security_vm_enough_memory_mm(mm, len >> MM_PAGE_SHIFT(mm)))
 		return -ENOMEM;
 
 	/*
@@ -2872,7 +2872,7 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	 * occur after forking, so the expand will only happen on new VMAs.
 	 */
 	if (vma && vma->vm_end == addr) {
-		VMG_STATE(vmg, mm, vmi, addr, addr + len, vma_flags, PHYS_PFN(addr));
+		VMG_STATE(vmg, mm, vmi, addr, addr + len, vma_flags, MM_PHYS_PFN(mm, addr));
 
 		vmg.prev = vma;
 		/* vmi is positioned at prev, which this mode expects. */
@@ -2892,7 +2892,8 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 		goto unacct_fail;
 
 	vma_set_anonymous(vma);
-	vma_set_range(vma, addr, addr + len, addr >> PAGE_SHIFT);
+	vma_set_range(vma, addr, addr + len, addr >> MM_PAGE_SHIFT(vma->vm_mm));
+	vma_set_slice_off(vma, 0);
 	vma->flags = vma_flags;
 	vma->vm_page_prot = vm_get_page_prot(vma_flags_to_legacy(vma_flags));
 	vma_start_write(vma);
@@ -2903,10 +2904,10 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	validate_mm(mm);
 out:
 	perf_event_mmap(vma);
-	mm->total_vm += len >> PAGE_SHIFT;
-	mm->data_vm += len >> PAGE_SHIFT;
+	mm->total_vm += len >> MM_PAGE_SHIFT(mm);
+	mm->data_vm += len >> MM_PAGE_SHIFT(mm);
 	if (vma_flags_test(&vma_flags, VMA_LOCKED_BIT))
-		mm->locked_vm += (len >> PAGE_SHIFT);
+		mm->locked_vm += len >> MM_PAGE_SHIFT(mm);
 	if (pgtable_supports_soft_dirty())
 		vma_set_flags(vma, VMA_SOFTDIRTY_BIT);
 	return 0;
@@ -2914,7 +2915,7 @@ out:
 mas_store_fail:
 	vm_area_free(vma);
 unacct_fail:
-	vm_unacct_memory(len >> PAGE_SHIFT);
+	vm_unacct_memory(len >> MM_PAGE_SHIFT(mm));
 	return -ENOMEM;
 }
 
