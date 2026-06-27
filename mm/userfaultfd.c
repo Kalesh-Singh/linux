@@ -418,12 +418,17 @@ out:
 static int copy_user_to_folio(struct folio *folio, unsigned long dst_addr,
 			      unsigned long src_addr, struct mm_struct *mm,
 			      unsigned long vm_start, unsigned int vm_slice_off,
-			      bool avoid_pagefault)
+			      bool is_anon, bool avoid_pagefault)
 {
-	unsigned int slice_idx = address_to_slice(mm, dst_addr, vm_start, vm_slice_off);
-	unsigned long offset = slice_idx * MM_PAGE_SIZE(mm);
+	unsigned int slice_idx = 0;
+	unsigned long offset;
 	void *kaddr;
 	int ret;
+
+	if (!is_anon)
+		slice_idx = address_to_slice(mm, dst_addr, vm_start, vm_slice_off);
+
+	offset = slice_idx * MM_PAGE_SIZE(mm);
 
 	kaddr = kmap_local_folio(folio, 0);
 	memset(kaddr, 0, PAGE_SIZE);
@@ -446,7 +451,8 @@ static int mfill_copy_folio_locked(struct folio *folio, unsigned long dst_addr,
 	int ret;
 
 	ret = copy_user_to_folio(folio, dst_addr, src_addr, vma->vm_mm,
-				 vma->vm_start, vma_slice_off(vma), true);
+				 vma->vm_start, vma_slice_off(vma),
+				 vma_is_anonymous(vma), true);
 	if (ret)
 		return ret;
 
@@ -534,7 +540,8 @@ static int mfill_copy_folio_retry(struct mfill_state *mfill_state,
 
 	err = copy_user_to_folio(folio, mfill_state->dst_addr, src_addr,
 				 mfill_state->ctx->mm, retry_state.vm_start,
-				 retry_state.vm_slice_off, false);
+				 retry_state.vm_slice_off,
+				 retry_state.ops == &anon_uffd_ops, false);
 	if (unlikely(err))
 		return err;
 
