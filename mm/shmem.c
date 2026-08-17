@@ -2469,6 +2469,22 @@ repeat:
 		return 0;
 	}
 
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (folio && !xa_is_value(folio) && vma && ppps_mm_is_compat(vma->vm_mm) &&
+	    userfaultfd_missing(vma)) {
+		struct shmem_inode_info *info = SHMEM_I(inode);
+		unsigned int slice_idx = vma_address_to_slice(vma, vmf->address);
+		void *entry = xa_load(&info->ppps_uffd_slices, index);
+		unsigned long mask = xa_is_value(entry) ? xa_to_value(entry) : 0;
+
+		if (!(mask & BIT(slice_idx))) {
+			folio_put(folio);
+			*fault_type = handle_userfault(vmf, VM_UFFD_MISSING);
+			return 0;
+		}
+	}
+#endif
+
 	if (xa_is_value(folio)) {
 		error = shmem_swapin_folio(inode, index, &folio,
 					   sgp, gfp, vma, fault_type);
@@ -3157,6 +3173,7 @@ int shmem_mfill_atomic_pte(pmd_t *dst_pmd,
 	}
 
 #ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+repeat:
 	if (ppps_mm_is_compat(dst_vma->vm_mm)) {
 		struct folio *existing = NULL;
 		ret = shmem_get_folio(inode, pgoff, 0, &existing, SGP_NOALLOC);
@@ -3178,14 +3195,13 @@ int shmem_mfill_atomic_pte(pmd_t *dst_pmd,
 
 			slice_idx = vma_address_to_slice(dst_vma, dst_addr);
 			entry = xa_load(&info->ppps_uffd_slices, pgoff);
-			if (!xa_is_value(entry) ||
-			    (xa_to_value(entry) & BIT(slice_idx))) {
+			mask = xa_is_value(entry) ? xa_to_value(entry) : 0;
+			if (mask & BIT(slice_idx)) {
 				folio_unlock(existing);
 				folio_put(existing);
 				shmem_inode_unacct_blocks(inode, 1);
 				return -EEXIST;
 			}
-			mask = xa_to_value(entry);
 			new_mask = mask | BIT(slice_idx);
 			ret = xa_err(xa_store(&info->ppps_uffd_slices, pgoff,
 					      xa_mk_value(new_mask), gfp));
@@ -3251,6 +3267,8 @@ int shmem_mfill_atomic_pte(pmd_t *dst_pmd,
 		if (!folio)
 			goto out_unacct_blocks;
 
+		folio_zero_range(folio, 0, folio_size(folio));
+
 		if (uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY)) {
 			page_kaddr = kmap_local_folio(folio, 0);
 			/*
@@ -3310,8 +3328,16 @@ int shmem_mfill_atomic_pte(pmd_t *dst_pmd,
 	if (ret)
 		goto out_release;
 	ret = shmem_add_to_page_cache(folio, mapping, pgoff, NULL, gfp);
-	if (ret)
+	if (ret) {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+		if (ret == -EEXIST && ppps_mm_is_compat(dst_vma->vm_mm)) {
+			folio_unlock(folio);
+			folio_put(folio);
+			goto repeat;
+		}
+#endif
 		goto out_release;
+	}
 
 #ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
 	if (ppps_mm_is_compat(dst_vma->vm_mm)) {
