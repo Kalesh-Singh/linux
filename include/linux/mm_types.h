@@ -1574,10 +1574,6 @@ static inline pgoff_t vma_linear_page_index(
 		return vma->vm_pgoff +
 		       ((address - vma->vm_start) >> PAGE_SHIFT);
 
-	if (!vma->vm_ops)
-		return vma->vm_pgoff +
-		       ((address - vma->vm_start) >> PAGE_SHIFT_COMPAT);
-
 	pgoff_t temp = (address - vma->vm_start) >> PAGE_SHIFT_COMPAT;
 
 	temp += vma_slice_off(vma);

@@ -12,22 +12,11 @@
 static inline pgoff_t vma_native_pages(const struct vm_area_struct *vma)
 {
 	bool is_compat = ppps_mm_is_compat(vma->vm_mm);
-	bool is_anon = !vma->vm_ops;
 	unsigned long nr_slices = vma_pages(vma);
 
-	if (!is_compat || is_anon) {
-		/*
-		 * For native processes and compat anonymous mappings (which do not track
-		 * subpage slices), the number of slices corresponds directly to the number
-		 * of host pages.
-		 */
+	if (!is_compat)
 		return nr_slices;
-	}
 
-	/*
-	 * For file-backed VMAs in compat processes, calculate the total host pages
-	 * needed to cover the range (including starting slice offset alignment).
-	 */
 	return (vma_slice_off(vma) + nr_slices) >> PPPS_SLICE_SHIFT;
 }
 
@@ -53,10 +42,9 @@ static inline unsigned long vmg_pages(const struct vma_merge_struct *vmg)
 static inline pgoff_t vmg_native_pages(const struct vma_merge_struct *vmg)
 {
 	bool is_compat = ppps_mm_is_compat(vmg->mm);
-	bool is_anon = !vmg->file;
 	unsigned long nr_slices = vmg_pages(vmg);
 
-	if (!is_compat || is_anon)
+	if (!is_compat)
 		return nr_slices;
 
 	return (vmg->slice_off + nr_slices) >> PPPS_SLICE_SHIFT;
@@ -70,7 +58,7 @@ static inline bool vmg_can_merge_offsets(const struct vma_merge_struct *vmg,
 	if (merge_next) {
 		pgoff_t pglen = vmg_native_pages(vmg);
 
-		/* Verify native page cache index alignment */
+		/* Verify native page index alignment */
 		if (vmg->next->vm_pgoff != vmg->pgoff + pglen)
 			return false;
 
@@ -84,7 +72,7 @@ static inline bool vmg_can_merge_offsets(const struct vma_merge_struct *vmg,
 	} else {
 		pgoff_t pglen = vma_native_pages(vmg->prev);
 
-		/* Verify native page cache index alignment */
+		/* Verify native page index alignment */
 		if (vmg->prev->vm_pgoff + pglen != vmg->pgoff)
 			return false;
 
@@ -106,14 +94,9 @@ static inline pgoff_t mmap_pgoff_offset(struct mm_struct *mm, pgoff_t pgoff,
 		return pgoff;
 
 	/*
-	 * File-backed and shared anonymous mappings must align with host page cache
-	 * boundaries. Scale the starting offset (in compat pages) to host pages.
-	 * Private anonymous mappings remain in compat page units.
+	 * In compat processes, scale starting offset (in compat pages) to host pages.
 	 */
-	if (file || (vm_flags & VM_SHARED))
-		return pgoff >> PPPS_SLICE_SHIFT;
-
-	return pgoff;
+	return pgoff >> PPPS_SLICE_SHIFT;
 }
 
 static inline unsigned int mmap_slice_offset(struct mm_struct *mm,
@@ -126,14 +109,9 @@ static inline unsigned int mmap_slice_offset(struct mm_struct *mm,
 		return 0;
 
 	/*
-	 * Extract the subpage slice alignment remainder of the user-supplied
-	 * offset relative to the host page boundary for file-backed and shared
-	 * anonymous mappings. Private anonymous mappings do not track slices.
+	 * Extract the subpage slice alignment remainder of the user-supplied offset.
 	 */
-	if (file || (vm_flags & VM_SHARED))
-		return pgoff & PPPS_SLICE_MASK;
-
-	return 0;
+	return pgoff & PPPS_SLICE_MASK;
 }
 
 #else /* !CONFIG_ARM64_PER_PROCESS_PAGE_SIZE */
