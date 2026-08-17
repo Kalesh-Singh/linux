@@ -1,0 +1,9 @@
+run_4kb
+test_ppps_anon
+test_ppps_basic
+test_ppps_cow
+test_ppps_file
+test_ppps_fork
+test_ppps_mremap
+test_ppps_vma
+*.o

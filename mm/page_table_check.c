@@ -125,7 +125,7 @@ static void page_table_check_set(unsigned long pfn, unsigned long pgcnt,
 
 		if (anon) {
 			BUG_ON(atomic_read(&ptc->file_map_count));
-			BUG_ON(atomic_inc_return(&ptc->anon_map_count) > 1 && rw);
+			BUG_ON(atomic_inc_return(&ptc->anon_map_count) > PPPS_SLICES_PER_PAGE && rw);
 		} else {
 			BUG_ON(atomic_read(&ptc->anon_map_count));
 			BUG_ON(atomic_inc_return(&ptc->file_map_count) < 0);

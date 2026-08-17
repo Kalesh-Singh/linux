@@ -818,11 +818,7 @@ struct folio_referenced_arg {
 static unsigned long
 folio_rmap_nr_ptes(struct folio *folio, struct vm_area_struct *vma)
 {
-	/*
-	 * A PPPS anonymous PTE maps one native page, whereas a file PTE maps
-	 * one process-sized slice of the native folio.
-	 */
-	if (ppps_mm_is_compat(vma->vm_mm) && !folio_test_anon(folio))
+	if (ppps_mm_is_compat(vma->vm_mm))
 		return folio_size(folio) >> MM_PAGE_SHIFT(vma->vm_mm);
 
 	return folio_nr_pages(folio);
@@ -1410,7 +1406,7 @@ void folio_add_new_anon_rmap(struct folio *folio, struct vm_area_struct *vma,
 	VM_WARN_ON_FOLIO(folio_test_hugetlb(folio), folio);
 	VM_WARN_ON_FOLIO(!exclusive && !folio_test_locked(folio), folio);
 	VM_BUG_ON_VMA(address < vma->vm_start ||
-			address + (nr << PAGE_SHIFT) > vma->vm_end, vma);
+			address + (nr << MM_PAGE_SHIFT(vma->vm_mm)) > vma->vm_end, vma);
 
 	/*
 	 * VM_DROPPABLE mappings don't swap; instead they're just dropped when
@@ -1574,7 +1570,7 @@ static __always_inline void __folio_remove_rmap(struct folio *folio,
 	switch (level) {
 	case RMAP_LEVEL_PTE:
 		if (!folio_test_large(folio)) {
-			nr = atomic_add_negative(-1, &folio->_mapcount);
+			nr = atomic_add_negative(-nr_pages, &folio->_mapcount);
 			break;
 		}
 

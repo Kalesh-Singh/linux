@@ -39,9 +39,6 @@ static inline unsigned int vma_slice_offset(struct vm_area_struct *vma,
 	if (!ppps_mm_is_compat(vma->vm_mm))
 		return 0;
 
-	if (vma_is_anonymous(vma))
-		return 0;
-
 	total_slices = ((addr - vma->vm_start) >> PAGE_SHIFT_COMPAT) +
 				vma_slice_off(vma);
 
@@ -69,7 +66,6 @@ static inline bool vmg_can_merge_offsets(const struct vma_merge_struct *vmg,
 					 bool merge_next)
 {
 	bool is_compat = ppps_mm_is_compat(vmg->mm);
-	bool is_anon = !vmg->file;
 
 	if (merge_next) {
 		pgoff_t pglen = vmg_native_pages(vmg);
@@ -78,8 +74,8 @@ static inline bool vmg_can_merge_offsets(const struct vma_merge_struct *vmg,
 		if (vmg->next->vm_pgoff != vmg->pgoff + pglen)
 			return false;
 
-		/* Non-compat or anonymous mappings don't track subpage slices */
-		if (!is_compat || is_anon)
+		/* Non-compat mappings don't track subpage slices */
+		if (!is_compat)
 			return true;
 
 		/* Verify compat subpage slice alignment */
@@ -92,8 +88,8 @@ static inline bool vmg_can_merge_offsets(const struct vma_merge_struct *vmg,
 		if (vmg->prev->vm_pgoff + pglen != vmg->pgoff)
 			return false;
 
-		/* Non-compat or anonymous mappings don't track subpage slices */
-		if (!is_compat || is_anon)
+		/* Non-compat mappings don't track subpage slices */
+		if (!is_compat)
 			return true;
 
 		/* Verify compat subpage slice alignment */

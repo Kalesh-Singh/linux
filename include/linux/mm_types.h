@@ -1599,9 +1599,6 @@ static inline unsigned int address_to_slice(struct mm_struct *mm,
 static inline unsigned int vma_address_to_slice(
 		const struct vm_area_struct *vma, unsigned long address)
 {
-	if (!vma->vm_ops)
-		return 0;
-
 	return address_to_slice(vma->vm_mm, address, vma->vm_start,
 				vma_slice_off(vma));
 }

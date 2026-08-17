@@ -1774,6 +1774,11 @@ static __always_inline void set_ptes(struct mm_struct *mm, unsigned long addr,
 {
 	pte = pte_mknoncont(pte);
 
+	if (ppps_mm_is_compat(mm)) {
+		__set_ptes(mm, addr, ptep, pte, nr);
+		return;
+	}
+
 	if (likely(nr == 1)) {
 		contpte_try_unfold(mm, addr, ptep, __ptep_get(ptep));
 		__set_ptes(mm, addr, ptep, pte, 1);

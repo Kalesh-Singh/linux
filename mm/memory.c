@@ -5190,49 +5190,137 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	if (!folio)
 		goto oom;
 
-	nr_pages = folio_nr_pages(folio);
-	addr = ALIGN_DOWN(vmf->address, nr_pages * MM_PAGE_SIZE(vma->vm_mm));
+	if (ppps_mm_is_compat(vma->vm_mm)) {
+		unsigned int slices_per_folio = PPPS_SLICES_PER_PAGE;
+		unsigned int sub = vma_address_to_slice(vma, vmf->address);
+		unsigned long vma_before = (vmf->address - vma->vm_start) >> PAGE_SHIFT_COMPAT;
+		unsigned long vma_after = (vma->vm_end - vmf->address) >> PAGE_SHIFT_COMPAT;
+		unsigned long pt_before = pte_index_mm(vma->vm_mm, vmf->address);
+		unsigned long pt_after = MM_PTRS_PER_PTE(vma->vm_mm) - pt_before;
+		unsigned long left, right;
+		unsigned int start_slice;
 
-	/*
-	 * The memory barrier inside __folio_mark_uptodate makes sure that
-	 * preceding stores to the page contents become visible before
-	 * the set_pte_at() write.
-	 */
-	__folio_mark_uptodate(folio);
+		if (unlikely(userfaultfd_armed(vma))) {
+			left = 0;
+			right = 1;
+		} else {
+			left = min3((unsigned long)sub, vma_before, pt_before);
+			right = min3((unsigned long)(slices_per_folio - sub), vma_after, pt_after);
+		}
+		start_slice = sub - left;
 
-	trace_android_vh_do_anonymous_page(vma, folio);
-	entry = mk_pte(&folio->page, vma->vm_page_prot);
-	entry = pte_sw_mkyoung(entry);
-	if (vma->vm_flags & VM_WRITE)
-		entry = pte_mkwrite(pte_mkdirty(entry), vma);
+		nr_pages = left + right;
+		addr = vmf->address - (left << PAGE_SHIFT_COMPAT);
 
-	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, addr, &vmf->ptl);
-	if (!vmf->pte)
-		goto release;
-	if (nr_pages == 1 && vmf_pte_changed(vmf)) {
-		update_mmu_tlb(vma, addr, vmf->pte);
-		goto release;
-	} else if (nr_pages > 1 && !pte_range_none(vmf->pte, nr_pages)) {
-		update_mmu_tlb_range(vma, addr, vmf->pte, nr_pages);
-		goto release;
+		__folio_mark_uptodate(folio);
+
+		trace_android_vh_do_anonymous_page(vma, folio);
+		entry = mk_pte(&folio->page, vma->vm_page_prot);
+		entry = folio_mk_pte_slice(folio, entry, start_slice);
+		entry = pte_sw_mkyoung(entry);
+		if (vma->vm_flags & VM_WRITE)
+			entry = pte_mkwrite(pte_mkdirty(entry), vma);
+
+		vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, addr, &vmf->ptl);
+		if (!vmf->pte)
+			goto release;
+
+		if (nr_pages > 1 && !pte_range_none(vmf->pte, nr_pages)) {
+			if (!pte_none(ptep_get(vmf->pte + left))) {
+				vmf->pte += left;
+				addr = vmf->address;
+				start_slice = sub;
+				nr_pages = 1;
+			} else {
+				unsigned long lo = left, hi = left + 1;
+
+				while (lo > 0 && pte_none(ptep_get(vmf->pte + lo - 1)))
+					lo--;
+				while (hi < nr_pages && pte_none(ptep_get(vmf->pte + hi)))
+					hi++;
+
+				vmf->pte += lo;
+				addr += lo * PAGE_SIZE_COMPAT;
+				start_slice += lo;
+				left -= lo;
+				nr_pages = hi - lo;
+			}
+
+			entry = mk_pte(&folio->page, vma->vm_page_prot);
+			entry = folio_mk_pte_slice(folio, entry, start_slice);
+			entry = pte_sw_mkyoung(entry);
+			if (vma->vm_flags & VM_WRITE)
+				entry = pte_mkwrite(pte_mkdirty(entry), vma);
+		}
+
+		if (nr_pages == 1 && vmf_pte_changed(vmf)) {
+			update_mmu_tlb(vma, addr, vmf->pte);
+			goto release;
+		}
+
+		ret = check_stable_address_space(vma->vm_mm);
+		if (ret)
+			goto release;
+
+		/* Deliver the page fault to userland, check inside PT lock */
+		if (userfaultfd_missing(vma)) {
+			pte_unmap_unlock(vmf->pte, vmf->ptl);
+			folio_put(folio);
+			return handle_userfault(vmf, VM_UFFD_MISSING);
+		}
+
+		folio_ref_add(folio, nr_pages - 1);
+		add_mm_counter(vma->vm_mm, MM_ANONPAGES, nr_pages);
+		count_mthp_stat(folio_order(folio), MTHP_STAT_ANON_FAULT_ALLOC);
+		folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
+		if (nr_pages > 1 && !folio_test_large(folio))
+			atomic_add(nr_pages - 1, &folio->_mapcount);
+		folio_add_lru_vma(folio, vma);
+	} else {
+		nr_pages = folio_nr_pages(folio);
+		addr = ALIGN_DOWN(vmf->address, nr_pages * PAGE_SIZE);
+
+		/*
+		 * The memory barrier inside __folio_mark_uptodate makes sure that
+		 * preceding stores to the page contents become visible before
+		 * the set_pte_at() write.
+		 */
+		__folio_mark_uptodate(folio);
+
+		trace_android_vh_do_anonymous_page(vma, folio);
+		entry = mk_pte(&folio->page, vma->vm_page_prot);
+		entry = pte_sw_mkyoung(entry);
+		if (vma->vm_flags & VM_WRITE)
+			entry = pte_mkwrite(pte_mkdirty(entry), vma);
+
+		vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, addr, &vmf->ptl);
+		if (!vmf->pte)
+			goto release;
+		if (nr_pages == 1 && vmf_pte_changed(vmf)) {
+			update_mmu_tlb(vma, addr, vmf->pte);
+			goto release;
+		} else if (nr_pages > 1 && !pte_range_none(vmf->pte, nr_pages)) {
+			update_mmu_tlb_range(vma, addr, vmf->pte, nr_pages);
+			goto release;
+		}
+
+		ret = check_stable_address_space(vma->vm_mm);
+		if (ret)
+			goto release;
+
+		/* Deliver the page fault to userland, check inside PT lock */
+		if (userfaultfd_missing(vma)) {
+			pte_unmap_unlock(vmf->pte, vmf->ptl);
+			folio_put(folio);
+			return handle_userfault(vmf, VM_UFFD_MISSING);
+		}
+
+		folio_ref_add(folio, nr_pages - 1);
+		add_mm_counter(vma->vm_mm, MM_ANONPAGES, nr_pages);
+		count_mthp_stat(folio_order(folio), MTHP_STAT_ANON_FAULT_ALLOC);
+		folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
+		folio_add_lru_vma(folio, vma);
 	}
-
-	ret = check_stable_address_space(vma->vm_mm);
-	if (ret)
-		goto release;
-
-	/* Deliver the page fault to userland, check inside PT lock */
-	if (userfaultfd_missing(vma)) {
-		pte_unmap_unlock(vmf->pte, vmf->ptl);
-		folio_put(folio);
-		return handle_userfault(vmf, VM_UFFD_MISSING);
-	}
-
-	folio_ref_add(folio, nr_pages - 1);
-	add_mm_counter(vma->vm_mm, MM_ANONPAGES, nr_pages);
-	count_mthp_stat(folio_order(folio), MTHP_STAT_ANON_FAULT_ALLOC);
-	folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
-	folio_add_lru_vma(folio, vma);
 setpte:
 	if (vmf_orig_pte_uffd_wp(vmf))
 		entry = pte_mkuffd_wp(entry);
@@ -5439,9 +5527,10 @@ void set_pte_range(struct vm_fault *vmf, struct folio *folio,
 		entry = pte_mkuffd_wp(entry);
 	/* copy-on-write page */
 	if (write && !(vma->vm_flags & VM_SHARED)) {
-		VM_BUG_ON_FOLIO(nr != 1, folio);
 		folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
 		folio_add_lru_vma(folio, vma);
+		if (nr > 1 && !folio_test_large(folio))
+			atomic_add(nr - 1, &folio->_mapcount);
 	} else {
 		folio_add_file_rmap_ptes(folio, page, nr, vma);
 	}
