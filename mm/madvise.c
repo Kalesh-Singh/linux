@@ -1226,7 +1226,7 @@ static long madvise_guard_install(struct vm_area_struct *vma,
 			return err;
 
 		if (err == 0) {
-			unsigned long nr_expected_pages = PHYS_PFN(end - start);
+			unsigned long nr_expected_pages = MM_PHYS_PFN(vma->vm_mm, end - start);
 
 			VM_WARN_ON(nr_pages != nr_expected_pages);
 			return 0;
