@@ -451,7 +451,7 @@ static inline void __set_ptes(struct mm_struct *mm,
 			      pte_t *ptep, pte_t pte, unsigned int nr)
 {
 	page_table_check_ptes_set(mm, ptep, pte, nr);
-	__sync_cache_and_tags(pte, nr);
+	__sync_cache_and_tags(pte, ppps_mm_is_compat(mm) ? 1 : nr);
 
 	for (;;) {
 		__check_safe_pte_update(mm, ptep, pte);
@@ -1799,6 +1799,11 @@ static inline void pte_clear(struct mm_struct *mm,
 static inline void clear_full_ptes(struct mm_struct *mm, unsigned long addr,
 				pte_t *ptep, unsigned int nr, int full)
 {
+	if (ppps_mm_is_compat(mm)) {
+		__clear_full_ptes(mm, addr, ptep, nr, full);
+		return;
+	}
+
 	if (likely(nr == 1)) {
 		contpte_try_unfold(mm, addr, ptep, __ptep_get(ptep));
 		__clear_full_ptes(mm, addr, ptep, nr, full);
@@ -1813,6 +1818,9 @@ static inline pte_t get_and_clear_full_ptes(struct mm_struct *mm,
 				unsigned int nr, int full)
 {
 	pte_t pte;
+
+	if (ppps_mm_is_compat(mm))
+		return __get_and_clear_full_ptes(mm, addr, ptep, nr, full);
 
 	if (likely(nr == 1)) {
 		contpte_try_unfold(mm, addr, ptep, __ptep_get(ptep));
@@ -1860,6 +1868,11 @@ static inline int ptep_clear_flush_young(struct vm_area_struct *vma,
 static __always_inline void wrprotect_ptes(struct mm_struct *mm,
 				unsigned long addr, pte_t *ptep, unsigned int nr)
 {
+	if (ppps_mm_is_compat(mm)) {
+		__wrprotect_ptes(mm, addr, ptep, nr);
+		return;
+	}
+
 	if (likely(nr == 1)) {
 		/*
 		 * Optimization: wrprotect_ptes() can only be called for present
@@ -1907,7 +1920,7 @@ static inline void clear_young_dirty_ptes(struct vm_area_struct *vma,
 					  unsigned long addr, pte_t *ptep,
 					  unsigned int nr, cydp_t flags)
 {
-	if (likely(nr == 1 && !pte_cont(__ptep_get(ptep))))
+	if (ppps_mm_is_compat(vma->vm_mm) || likely(nr == 1 && !pte_cont(__ptep_get(ptep))))
 		__clear_young_dirty_ptes(vma, addr, ptep, nr, flags);
 	else
 		contpte_clear_young_dirty_ptes(vma, addr, ptep, nr, flags);
