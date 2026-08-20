@@ -1923,7 +1923,7 @@ retry:
 
 	flush_tlb_batched_pending(mm);
 	lazy_mmu_mode_enable();
-	do {
+	for_each_pte_range(pte, addr, end, nr, PAGE_SIZE) {
 		bool any_skipped = false;
 
 		if (need_resched()) {
@@ -1940,7 +1940,7 @@ retry:
 			direct_reclaim = false;
 			break;
 		}
-	} while (pte += nr, addr += PAGE_SIZE * nr, addr != end);
+	}
 
 	/*
 	 * Fast path: try to hold the pmd lock and unmap the PTE page.
