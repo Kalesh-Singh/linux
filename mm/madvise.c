@@ -453,8 +453,7 @@ restart:
 		return 0;
 	flush_tlb_batched_pending(mm);
 	lazy_mmu_mode_enable();
-	for (; addr < end; pte += nr, addr += nr * PAGE_SIZE) {
-		nr = 1;
+	for_each_pte_range(pte, addr, end, nr, PAGE_SIZE) {
 		ptent = ptep_get(pte);
 
 		if (++batch_count == SWAP_CLUSTER_MAX) {
@@ -675,8 +674,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 		return 0;
 	flush_tlb_batched_pending(mm);
 	lazy_mmu_mode_enable();
-	for (; addr != end; pte += nr, addr += PAGE_SIZE * nr) {
-		nr = 1;
+	for_each_pte_range(pte, addr, end, nr, PAGE_SIZE) {
 		ptent = ptep_get(pte);
 
 		if (pte_none(ptent))
