@@ -3316,6 +3316,7 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	pte_t *pte, *mapped_pte;
 	int err = 0;
 	spinlock_t *ptl;
+	int step;
 
 	if (create) {
 		mapped_pte = pte = (mm == &init_mm) ?
@@ -3334,13 +3335,13 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	lazy_mmu_mode_enable();
 
 	if (fn) {
-		do {
+		for_each_pte_range(pte, addr, end, step, PAGE_SIZE) {
 			if (create || !pte_none(ptep_get(pte))) {
 				err = fn(pte, addr, data);
 				if (err)
 					break;
 			}
-		} while (pte++, addr += PAGE_SIZE, addr != end);
+		}
 	}
 	*mask |= PGTBL_PTE_MODIFIED;
 
