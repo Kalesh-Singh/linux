@@ -671,100 +671,124 @@ static void queue_folios_pmd(pmd_t *pmd, struct mm_walk *walk)
 		qp->nr_failed++;
 }
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static bool queue_folios_pmd_thp_entry(pmd_t *pmd, struct mm_walk *walk)
+{
+	spinlock_t *ptl;
+
+	ptl = pmd_trans_huge_lock(pmd, walk->vma);
+	if (!ptl)
+		return false;
+
+	queue_folios_pmd(pmd, walk);
+	spin_unlock(ptl);
+	return true;
+}
+#else
+static inline bool queue_folios_pmd_thp_entry(pmd_t *pmd, struct mm_walk *walk)
+{
+	return false;
+}
+#endif
+
+static int queue_folios_pmd_entry(pmd_t *pmd, unsigned long addr,
+				  unsigned long next, struct mm_walk *walk)
+{
+	struct queue_pages *qp = walk->private;
+
+	if (queue_folios_pmd_thp_entry(pmd, walk)) {
+		walk->action = ACTION_CONTINUE;
+		if (qp->nr_failed && strictly_unmovable(qp->flags))
+			return -EIO;
+	}
+
+	return 0;
+}
+
 /*
  * Scan through folios, checking if they satisfy the required conditions,
  * moving them from LRU to local pagelist for migration if they do (or not).
  *
- * queue_folios_pte_range() has two possible return values:
+ * queue_folios_pte_entry() has two possible return values:
  * 0 - continue walking to scan for more, even if an existing folio on the
  *     wrong node could not be isolated and queued for migration.
  * -EIO - only MPOL_MF_STRICT was specified, without MPOL_MF_MOVE or ..._ALL,
  *        and an existing folio was on a node that does not follow the policy.
  */
-static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
-			unsigned long end, struct mm_walk *walk)
+static int queue_folios_pte_entry(pte_t *pte, unsigned long addr,
+				  unsigned long next, struct mm_walk *walk)
 {
 	struct vm_area_struct *vma = walk->vma;
-	struct folio *folio;
 	struct queue_pages *qp = walk->private;
 	unsigned long flags = qp->flags;
-	pte_t *pte, *mapped_pte;
-	pte_t ptent;
-	spinlock_t *ptl;
-	int max_nr, nr;
+	pte_t ptent = ptep_get(pte);
+	struct folio *folio;
+	int nr = 1;
 
-	ptl = pmd_trans_huge_lock(pmd, vma);
-	if (ptl) {
-		queue_folios_pmd(pmd, walk);
-		spin_unlock(ptl);
-		goto out;
-	}
+	if (pte_none(ptent))
+		return 0;
 
-	mapped_pte = pte = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
-	if (!pte) {
-		walk->action = ACTION_AGAIN;
+	if (!pte_present(ptent)) {
+		const softleaf_t entry = softleaf_from_pte(ptent);
+
+		if (softleaf_is_migration(entry))
+			qp->nr_failed++;
 		return 0;
 	}
-	for (; addr != end; pte += nr, addr += nr * PAGE_SIZE) {
-		max_nr = (end - addr) >> PAGE_SHIFT;
-		nr = 1;
-		ptent = ptep_get(pte);
-		if (pte_none(ptent))
-			continue;
-		if (!pte_present(ptent)) {
-			const softleaf_t entry = softleaf_from_pte(ptent);
 
-			if (softleaf_is_migration(entry))
-				qp->nr_failed++;
-			continue;
-		}
-		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio || folio_is_zone_device(folio))
-			continue;
-		if (folio_test_large(folio) && max_nr != 1)
+	folio = vm_normal_folio(vma, addr, ptent);
+	if (!folio || folio_is_zone_device(folio))
+		return 0;
+
+	if (folio_test_large(folio)) {
+		int max_nr = (next - addr) >> PAGE_SHIFT;
+
+		if (max_nr != 1) {
 			nr = folio_pte_batch(folio, pte, ptent, max_nr);
-		/*
-		 * vm_normal_folio() filters out zero pages, but there might
-		 * still be reserved folios to skip, perhaps in a VDSO.
-		 */
-		if (folio_test_reserved(folio))
-			continue;
-		if (!queue_folio_required(folio, qp))
-			continue;
-		if (folio_test_large(folio)) {
-			/*
-			 * A large folio can only be isolated from LRU once,
-			 * but may be mapped by many PTEs (and Copy-On-Write may
-			 * intersperse PTEs of other, order 0, folios).  This is
-			 * a common case, so don't mistake it for failure (but
-			 * there can be other cases of multi-mapped pages which
-			 * this quick check does not help to filter out - and a
-			 * search of the pagelist might grow to be prohibitive).
-			 *
-			 * migrate_pages(&pagelist) returns nr_failed folios, so
-			 * check "large" now so that queue_pages_range() returns
-			 * a comparable nr_failed folios.  This does imply that
-			 * if folio could not be isolated for some racy reason
-			 * at its first PTE, later PTEs will not give it another
-			 * chance of isolation; but keeps the accounting simple.
-			 */
-			if (folio == qp->large)
-				continue;
-			qp->large = folio;
-		}
-		if (!(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
-		    !vma_migratable(vma) ||
-		    !migrate_folio_add(folio, qp->pagelist, flags)) {
-			qp->nr_failed += nr;
-			if (strictly_unmovable(flags))
-				break;
+			walk->step = nr;
 		}
 	}
-	pte_unmap_unlock(mapped_pte, ptl);
-	cond_resched();
-out:
-	if (qp->nr_failed && strictly_unmovable(flags))
-		return -EIO;
+
+	/*
+	 * vm_normal_folio() filters out zero pages, but there might
+	 * still be reserved folios to skip, perhaps in a VDSO.
+	 */
+	if (folio_test_reserved(folio))
+		return 0;
+
+	if (!queue_folio_required(folio, qp))
+		return 0;
+
+	if (folio_test_large(folio)) {
+		/*
+		 * A large folio can only be isolated from LRU once,
+		 * but may be mapped by many PTEs (and Copy-On-Write may
+		 * intersperse PTEs of other, order 0, folios).  This is
+		 * a common case, so don't mistake it for failure (but
+		 * there can be other cases of multi-mapped pages which
+		 * this quick check does not help to filter out - and a
+		 * search of the pagelist might grow to be prohibitive).
+		 *
+		 * migrate_pages(&pagelist) returns nr_failed folios, so
+		 * check "large" now so that queue_pages_range() returns
+		 * a comparable nr_failed folios.  This does imply that
+		 * if folio could not be isolated for some racy reason
+		 * at its first PTE, later PTEs will not give it another
+		 * chance of isolation; but keeps the accounting simple.
+		 */
+		if (folio == qp->large)
+			return 0;
+		qp->large = folio;
+	}
+
+	if (!(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
+	    !vma_migratable(vma) ||
+	    !migrate_folio_add(folio, qp->pagelist, flags)) {
+		qp->nr_failed += nr;
+		if (strictly_unmovable(flags))
+			return -EIO;
+	}
+
 	return 0;
 }
 
@@ -950,14 +974,16 @@ static int queue_pages_test_walk(unsigned long start, unsigned long end,
 
 static const struct mm_walk_ops queue_pages_walk_ops = {
 	.hugetlb_entry		= queue_folios_hugetlb,
-	.pmd_entry		= queue_folios_pte_range,
+	.pmd_entry		= queue_folios_pmd_entry,
+	.pte_entry		= queue_folios_pte_entry,
 	.test_walk		= queue_pages_test_walk,
 	.walk_lock		= PGWALK_RDLOCK,
 };
 
 static const struct mm_walk_ops queue_pages_lock_vma_walk_ops = {
 	.hugetlb_entry		= queue_folios_hugetlb,
-	.pmd_entry		= queue_folios_pte_range,
+	.pmd_entry		= queue_folios_pmd_entry,
+	.pte_entry		= queue_folios_pte_entry,
 	.test_walk		= queue_pages_test_walk,
 	.walk_lock		= PGWALK_WRLOCK,
 };
