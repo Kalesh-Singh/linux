@@ -2580,104 +2580,45 @@ static int unuse_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 	return 0;
 }
 
-static inline int unuse_pmd_range(struct vm_area_struct *vma, pud_t *pud,
-				unsigned long addr, unsigned long end,
-				unsigned int type)
-{
-	pmd_t *pmd;
-	unsigned long next;
-	int ret;
+struct unuse_walk_private {
+	unsigned int type;
+};
 
-	pmd = pmd_offset(pud, addr);
-	do {
-		cond_resched();
-		next = pmd_addr_end(addr, end);
-		ret = unuse_pte_range(vma, pmd, addr, next, type);
-		if (ret)
-			return ret;
-	} while (pmd++, addr = next, addr != end);
+static int unuse_test_walk(unsigned long start, unsigned long end,
+			   struct mm_walk *walk)
+{
+	struct vm_area_struct *vma = walk->vma;
+
+	if (!vma->anon_vma || is_vm_hugetlb_page(vma))
+		return 1;
 	return 0;
 }
 
-static inline int unuse_pud_range(struct vm_area_struct *vma, p4d_t *p4d,
-				unsigned long addr, unsigned long end,
-				unsigned int type)
+static int unuse_pmd_entry(pmd_t *pmd, unsigned long addr,
+			   unsigned long next, struct mm_walk *walk)
 {
-	pud_t *pud;
-	unsigned long next;
-	int ret;
+	struct unuse_walk_private *priv = walk->private;
 
-	pud = pud_offset(p4d, addr);
-	do {
-		next = pud_addr_end(addr, end);
-		if (pud_none_or_clear_bad(pud))
-			continue;
-		ret = unuse_pmd_range(vma, pud, addr, next, type);
-		if (ret)
-			return ret;
-	} while (pud++, addr = next, addr != end);
-	return 0;
+	cond_resched();
+	return unuse_pte_range(walk->vma, pmd, addr, next, priv->type);
 }
 
-static inline int unuse_p4d_range(struct vm_area_struct *vma, pgd_t *pgd,
-				unsigned long addr, unsigned long end,
-				unsigned int type)
-{
-	p4d_t *p4d;
-	unsigned long next;
-	int ret;
-
-	p4d = p4d_offset(pgd, addr);
-	do {
-		next = p4d_addr_end(addr, end);
-		if (p4d_none_or_clear_bad(p4d))
-			continue;
-		ret = unuse_pud_range(vma, p4d, addr, next, type);
-		if (ret)
-			return ret;
-	} while (p4d++, addr = next, addr != end);
-	return 0;
-}
-
-static int unuse_vma(struct vm_area_struct *vma, unsigned int type)
-{
-	pgd_t *pgd;
-	unsigned long addr, end, next;
-	int ret;
-
-	addr = vma->vm_start;
-	end = vma->vm_end;
-
-	pgd = pgd_offset(vma->vm_mm, addr);
-	do {
-		next = pgd_addr_end(addr, end);
-		if (pgd_none_or_clear_bad(pgd))
-			continue;
-		ret = unuse_p4d_range(vma, pgd, addr, next, type);
-		if (ret)
-			return ret;
-	} while (pgd++, addr = next, addr != end);
-	return 0;
-}
+static const struct mm_walk_ops unuse_walk_ops = {
+	.pmd_entry	= unuse_pmd_entry,
+	.test_walk	= unuse_test_walk,
+	.walk_lock	= PGWALK_RDLOCK,
+};
 
 static int unuse_mm(struct mm_struct *mm, unsigned int type)
 {
-	struct vm_area_struct *vma;
+	struct unuse_walk_private priv = { .type = type };
 	int ret = 0;
-	VMA_ITERATOR(vmi, mm, 0);
 
 	mmap_read_lock(mm);
 	if (check_stable_address_space(mm))
 		goto unlock;
-	for_each_vma(vmi, vma) {
-		if (vma->anon_vma && !is_vm_hugetlb_page(vma)) {
-			ret = unuse_vma(vma, type);
-			if (ret)
-				break;
-		}
 
-		cond_resched();
-	}
+	ret = walk_page_range(mm, 0, TASK_SIZE, &unuse_walk_ops, &priv);
 unlock:
 	mmap_read_unlock(mm);
 	return ret;
