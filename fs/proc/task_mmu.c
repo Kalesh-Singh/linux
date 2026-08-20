@@ -2442,6 +2442,7 @@ struct pagemap_scan_private {
 	struct page_region *vec_buf;
 	unsigned long vec_buf_len, vec_buf_index, found_pages;
 	struct page_region __user *vec_out;
+	unsigned long tlbflush_start, tlbflush_end;
 };
 
 static unsigned long pagemap_page_category(struct pagemap_scan_private *p,
@@ -2839,102 +2840,123 @@ out_unlock:
 #endif
 }
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static bool pagemap_scan_pmd_thp_entry(pmd_t *pmd, unsigned long start,
+				       unsigned long end, struct mm_walk *walk,
+				       int *err)
+{
+	*err = pagemap_scan_thp_entry(pmd, start, end, walk);
+	return *err != -ENOENT;
+}
+#else
+static inline bool pagemap_scan_pmd_thp_entry(pmd_t *pmd, unsigned long start,
+					      unsigned long end, struct mm_walk *walk,
+					      int *err)
+{
+	return false;
+}
+#endif
+
 static int pagemap_scan_pmd_entry(pmd_t *pmd, unsigned long start,
 				  unsigned long end, struct mm_walk *walk)
 {
+	int err = 0;
+
+	if (pagemap_scan_pmd_thp_entry(pmd, start, end, walk, &err)) {
+		walk->action = ACTION_CONTINUE;
+		return err;
+	}
+
+	return 0;
+}
+
+static int pagemap_scan_wp_pte_entry(pte_t *pte, unsigned long addr,
+				     unsigned long next, struct mm_walk *walk)
+{
+	struct pagemap_scan_private *p = walk->private;
+	pte_t ptent = ptep_get(pte);
+
+	if ((pte_present(ptent) && pte_uffd_wp(ptent)) ||
+	    pte_swp_uffd_wp_any(ptent))
+		return 0;
+
+	make_uffd_wp_pte(walk->vma, addr, pte, ptent);
+	p->tlbflush_start = min(p->tlbflush_start, addr);
+	p->tlbflush_end = max(p->tlbflush_end, next);
+	return 0;
+}
+
+static int pagemap_scan_written_pte_entry(pte_t *pte, unsigned long addr,
+					  unsigned long next, struct mm_walk *walk)
+{
 	struct pagemap_scan_private *p = walk->private;
 	struct vm_area_struct *vma = walk->vma;
-	unsigned long addr, flush_end = 0;
-	pte_t *pte, *start_pte;
-	spinlock_t *ptl;
+	pte_t ptent = ptep_get(pte);
 	int ret;
 
-	ret = pagemap_scan_thp_entry(pmd, start, end, walk);
-	if (ret != -ENOENT)
+	if ((pte_present(ptent) && pte_uffd_wp(ptent)) ||
+	    pte_swp_uffd_wp_any(ptent))
+		return 0;
+
+	ret = pagemap_scan_output(p->cur_vma_category | PAGE_IS_WRITTEN,
+				  p, addr, &next);
+	if (next == addr)
+		return -ENOSPC;
+
+	if (~p->arg.flags & PM_SCAN_WP_MATCHING)
 		return ret;
 
-	ret = 0;
-	start_pte = pte = pte_offset_map_lock(vma->vm_mm, pmd, start, &ptl);
-	if (!pte) {
-		walk->action = ACTION_AGAIN;
-		return 0;
-	}
-
-	lazy_mmu_mode_enable();
-
-	if ((p->arg.flags & PM_SCAN_WP_MATCHING) && !p->vec_out) {
-		/* Fast path for performing exclusive WP */
-		for (addr = start; addr != end; pte++, addr += PAGE_SIZE) {
-			pte_t ptent = ptep_get(pte);
-
-			if ((pte_present(ptent) && pte_uffd_wp(ptent)) ||
-			    pte_swp_uffd_wp_any(ptent))
-				continue;
-			make_uffd_wp_pte(vma, addr, pte, ptent);
-			if (!flush_end)
-				start = addr;
-			flush_end = addr + PAGE_SIZE;
-		}
-		goto flush_and_return;
-	}
-
-	if (!p->arg.category_anyof_mask && !p->arg.category_inverted &&
-	    p->arg.category_mask == PAGE_IS_WRITTEN &&
-	    p->arg.return_mask == PAGE_IS_WRITTEN) {
-		for (addr = start; addr < end; pte++, addr += PAGE_SIZE) {
-			unsigned long next = addr + PAGE_SIZE;
-			pte_t ptent = ptep_get(pte);
-
-			if ((pte_present(ptent) && pte_uffd_wp(ptent)) ||
-			    pte_swp_uffd_wp_any(ptent))
-				continue;
-			ret = pagemap_scan_output(p->cur_vma_category | PAGE_IS_WRITTEN,
-						  p, addr, &next);
-			if (next == addr)
-				break;
-			if (~p->arg.flags & PM_SCAN_WP_MATCHING)
-				continue;
-			make_uffd_wp_pte(vma, addr, pte, ptent);
-			if (!flush_end)
-				start = addr;
-			flush_end = next;
-		}
-		goto flush_and_return;
-	}
-
-	for (addr = start; addr != end; pte++, addr += PAGE_SIZE) {
-		pte_t ptent = ptep_get(pte);
-		unsigned long categories = p->cur_vma_category |
-					   pagemap_page_category(p, vma, addr, ptent);
-		unsigned long next = addr + PAGE_SIZE;
-
-		if (!pagemap_scan_is_interesting_page(categories, p))
-			continue;
-
-		ret = pagemap_scan_output(categories, p, addr, &next);
-		if (next == addr)
-			break;
-
-		if (~p->arg.flags & PM_SCAN_WP_MATCHING)
-			continue;
-		if (~categories & PAGE_IS_WRITTEN)
-			continue;
-
-		make_uffd_wp_pte(vma, addr, pte, ptent);
-		if (!flush_end)
-			start = addr;
-		flush_end = next;
-	}
-
-flush_and_return:
-	if (flush_end)
-		flush_tlb_range(vma, start, addr);
-
-	lazy_mmu_mode_disable();
-	pte_unmap_unlock(start_pte, ptl);
-
-	cond_resched();
+	make_uffd_wp_pte(vma, addr, pte, ptent);
+	p->tlbflush_start = min(p->tlbflush_start, addr);
+	p->tlbflush_end = max(p->tlbflush_end, next);
 	return ret;
+}
+
+static int pagemap_scan_pte_entry(pte_t *pte, unsigned long addr,
+				  unsigned long next, struct mm_walk *walk)
+{
+	struct pagemap_scan_private *p = walk->private;
+	struct vm_area_struct *vma = walk->vma;
+	pte_t ptent = ptep_get(pte);
+	unsigned long categories;
+	int ret;
+
+	categories = p->cur_vma_category |
+		     pagemap_page_category(p, vma, addr, ptent);
+	if (!pagemap_scan_is_interesting_page(categories, p))
+		return 0;
+
+	ret = pagemap_scan_output(categories, p, addr, &next);
+	if (next == addr)
+		return -ENOSPC;
+
+	if (~p->arg.flags & PM_SCAN_WP_MATCHING)
+		return ret;
+	if (~categories & PAGE_IS_WRITTEN)
+		return ret;
+
+	make_uffd_wp_pte(vma, addr, pte, ptent);
+	p->tlbflush_start = min(p->tlbflush_start, addr);
+	p->tlbflush_end = max(p->tlbflush_end, next);
+	return ret;
+}
+
+static int pagemap_scan_pre_vma(unsigned long start, unsigned long end,
+				struct mm_walk *walk)
+{
+	struct pagemap_scan_private *p = walk->private;
+
+	p->tlbflush_start = end;
+	p->tlbflush_end = start;
+	return 0;
+}
+
+static void pagemap_scan_post_vma(struct mm_walk *walk)
+{
+	struct pagemap_scan_private *p = walk->private;
+
+	if (p->tlbflush_end > p->tlbflush_start)
+		flush_tlb_range(walk->vma, p->tlbflush_start, p->tlbflush_end);
 }
 
 #ifdef CONFIG_HUGETLB_PAGE
@@ -3082,8 +3104,11 @@ static int pagemap_scan_pte_hole(unsigned long addr, unsigned long end,
 static const struct mm_walk_ops pagemap_scan_ops = {
 	.test_walk = pagemap_scan_test_walk,
 	.pmd_entry = pagemap_scan_pmd_entry,
+	.pte_entry = pagemap_scan_pte_entry,
 	.pte_hole = pagemap_scan_pte_hole,
 	.hugetlb_entry = pagemap_scan_hugetlb_entry,
+	.pre_vma = pagemap_scan_pre_vma,
+	.post_vma = pagemap_scan_post_vma,
 };
 
 static int pagemap_scan_get_args(struct pm_scan_arg *arg,
@@ -3186,6 +3211,7 @@ static long pagemap_scan_flush_buffer(struct pagemap_scan_private *p)
 static long do_pagemap_scan(struct mm_struct *mm, unsigned long uarg)
 {
 	struct pagemap_scan_private p = {0};
+	struct mm_walk_ops ops = pagemap_scan_ops;
 	unsigned long walk_start;
 	size_t n_ranges_out = 0;
 	int ret;
@@ -3199,6 +3225,13 @@ static long do_pagemap_scan(struct mm_struct *mm, unsigned long uarg)
 	ret = pagemap_scan_init_bounce_buffer(&p);
 	if (ret)
 		return ret;
+
+	if ((p.arg.flags & PM_SCAN_WP_MATCHING) && !p.vec_out)
+		ops.pte_entry = pagemap_scan_wp_pte_entry;
+	else if (!p.arg.category_anyof_mask && !p.arg.category_inverted &&
+		 p.arg.category_mask == PAGE_IS_WRITTEN &&
+		 p.arg.return_mask == PAGE_IS_WRITTEN)
+		ops.pte_entry = pagemap_scan_written_pte_entry;
 
 	for (walk_start = p.arg.start; walk_start < p.arg.end;
 			walk_start = p.arg.walk_end) {
@@ -3222,7 +3255,7 @@ static long do_pagemap_scan(struct mm_struct *mm, unsigned long uarg)
 		}
 
 		ret = walk_page_range(mm, walk_start, p.arg.end,
-				      &pagemap_scan_ops, &p);
+				      &ops, &p);
 
 		if (p.arg.flags & PM_SCAN_WP_MATCHING)
 			mmu_notifier_invalidate_range_end(&range);
