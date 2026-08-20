@@ -1760,63 +1760,78 @@ static inline void clear_soft_dirty_pmd(struct vm_area_struct *vma,
 }
 #endif
 
-static int clear_refs_pte_range(pmd_t *pmd, unsigned long addr,
-				unsigned long end, struct mm_walk *walk)
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static bool clear_refs_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+				     struct mm_walk *walk)
 {
 	struct clear_refs_private *cp = walk->private;
 	struct vm_area_struct *vma = walk->vma;
-	pte_t *pte, ptent;
 	spinlock_t *ptl;
 	struct folio *folio;
 
 	ptl = pmd_trans_huge_lock(pmd, vma);
-	if (ptl) {
-		if (cp->type == CLEAR_REFS_SOFT_DIRTY) {
-			clear_soft_dirty_pmd(vma, addr, pmd);
-			goto out;
-		}
+	if (!ptl)
+		return false;
 
-		if (!pmd_present(*pmd))
-			goto out;
+	if (cp->type == CLEAR_REFS_SOFT_DIRTY) {
+		clear_soft_dirty_pmd(vma, addr, pmd);
+		goto out;
+	}
 
-		folio = pmd_folio(*pmd);
+	if (!pmd_present(*pmd))
+		goto out;
 
-		/* Clear accessed and referenced bits. */
-		pmdp_test_and_clear_young(vma, addr, pmd);
-		folio_test_clear_young(folio);
-		folio_clear_referenced(folio);
+	folio = pmd_folio(*pmd);
+
+	/* Clear accessed and referenced bits. */
+	pmdp_test_and_clear_young(vma, addr, pmd);
+	folio_test_clear_young(folio);
+	folio_clear_referenced(folio);
 out:
-		spin_unlock(ptl);
+	spin_unlock(ptl);
+	return true;
+}
+#else
+static inline bool clear_refs_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+					    struct mm_walk *walk)
+{
+	return false;
+}
+#endif
+
+static int clear_refs_pmd_entry(pmd_t *pmd, unsigned long addr,
+				unsigned long next, struct mm_walk *walk)
+{
+	if (clear_refs_pmd_thp_entry(pmd, addr, walk))
+		walk->action = ACTION_CONTINUE;
+
+	return 0;
+}
+
+static int clear_refs_pte_entry(pte_t *pte, unsigned long addr,
+				unsigned long next, struct mm_walk *walk)
+{
+	struct clear_refs_private *cp = walk->private;
+	struct vm_area_struct *vma = walk->vma;
+	pte_t ptent = ptep_get(pte);
+	struct folio *folio;
+
+	if (cp->type == CLEAR_REFS_SOFT_DIRTY) {
+		clear_soft_dirty(vma, addr, pte);
 		return 0;
 	}
 
-	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
-	if (!pte) {
-		walk->action = ACTION_AGAIN;
+	if (!pte_present(ptent))
 		return 0;
-	}
-	for (; addr != end; pte++, addr += PAGE_SIZE) {
-		ptent = ptep_get(pte);
 
-		if (cp->type == CLEAR_REFS_SOFT_DIRTY) {
-			clear_soft_dirty(vma, addr, pte);
-			continue;
-		}
+	folio = vm_normal_folio(vma, addr, ptent);
+	if (!folio)
+		return 0;
 
-		if (!pte_present(ptent))
-			continue;
-
-		folio = vm_normal_folio(vma, addr, ptent);
-		if (!folio)
-			continue;
-
-		/* Clear accessed and referenced bits. */
-		ptep_test_and_clear_young(vma, addr, pte);
-		folio_test_clear_young(folio);
-		folio_clear_referenced(folio);
-	}
-	pte_unmap_unlock(pte - 1, ptl);
-	cond_resched();
+	/* Clear accessed and referenced bits. */
+	ptep_test_and_clear_young(vma, addr, pte);
+	folio_test_clear_young(folio);
+	folio_clear_referenced(folio);
 	return 0;
 }
 
@@ -1843,7 +1858,8 @@ static int clear_refs_test_walk(unsigned long start, unsigned long end,
 }
 
 static const struct mm_walk_ops clear_refs_walk_ops = {
-	.pmd_entry		= clear_refs_pte_range,
+	.pte_entry		= clear_refs_pte_entry,
+	.pmd_entry		= clear_refs_pmd_entry,
 	.test_walk		= clear_refs_test_walk,
 	.walk_lock		= PGWALK_WRLOCK,
 };
