@@ -1046,8 +1046,8 @@ static void smaps_pte_hole_lookup(unsigned long addr, struct mm_walk *walk)
 #endif
 }
 
-static void smaps_pte_entry(pte_t *pte, unsigned long addr,
-		struct mm_walk *walk)
+static int smaps_pte_entry(pte_t *pte, unsigned long addr, unsigned long next,
+			   struct mm_walk *walk)
 {
 	struct mem_size_stats *mss = walk->private;
 	struct vm_area_struct *vma = walk->vma;
@@ -1087,14 +1087,15 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 	}
 
 	if (!page)
-		return;
+		return 0;
 
 	smaps_account(mss, page, false, young, dirty, locked, present);
+	return 0;
 }
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
-static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr,
-		struct mm_walk *walk)
+static bool smaps_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+				struct mm_walk *walk)
 {
 	struct mem_size_stats *mss = walk->private;
 	struct vm_area_struct *vma = walk->vma;
@@ -1102,9 +1103,14 @@ static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr,
 	struct page *page = NULL;
 	bool present = false;
 	struct folio *folio;
+	spinlock_t *ptl;
+
+	ptl = pmd_trans_huge_lock(pmd, vma);
+	if (!ptl)
+		return false;
 
 	if (pmd_none(*pmd))
-		return;
+		goto out;
 	if (pmd_present(*pmd)) {
 		page = vm_normal_page_pmd(vma, addr, *pmd);
 		present = true;
@@ -1115,7 +1121,7 @@ static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr,
 			page = softleaf_to_page(entry);
 	}
 	if (IS_ERR_OR_NULL(page))
-		return;
+		goto out;
 	folio = page_folio(page);
 	if (folio_test_anon(folio))
 		mss->anonymous_thp += HPAGE_PMD_SIZE;
@@ -1128,38 +1134,24 @@ static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr,
 
 	smaps_account(mss, page, true, pmd_young(*pmd), pmd_dirty(*pmd),
 		      locked, present);
+out:
+	spin_unlock(ptl);
+	return true;
 }
 #else
-static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr,
-		struct mm_walk *walk)
+static inline bool smaps_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+				       struct mm_walk *walk)
 {
+	return false;
 }
 #endif
 
-static int smaps_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
+static int smaps_pmd_entry(pmd_t *pmd, unsigned long addr, unsigned long next,
 			   struct mm_walk *walk)
 {
-	struct vm_area_struct *vma = walk->vma;
-	pte_t *pte;
-	spinlock_t *ptl;
+	if (smaps_pmd_thp_entry(pmd, addr, walk))
+		walk->action = ACTION_CONTINUE;
 
-	ptl = pmd_trans_huge_lock(pmd, vma);
-	if (ptl) {
-		smaps_pmd_entry(pmd, addr, walk);
-		spin_unlock(ptl);
-		goto out;
-	}
-
-	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
-	if (!pte) {
-		walk->action = ACTION_AGAIN;
-		return 0;
-	}
-	for (; addr != end; pte++, addr += PAGE_SIZE)
-		smaps_pte_entry(pte, addr, walk);
-	pte_unmap_unlock(pte - 1, ptl);
-out:
-	cond_resched();
 	return 0;
 }
 
@@ -1299,13 +1291,15 @@ static int smaps_hugetlb_range(pte_t *pte, unsigned long hmask,
 #endif /* HUGETLB_PAGE */
 
 static const struct mm_walk_ops smaps_walk_ops = {
-	.pmd_entry		= smaps_pte_range,
+	.pte_entry		= smaps_pte_entry,
+	.pmd_entry		= smaps_pmd_entry,
 	.hugetlb_entry		= smaps_hugetlb_range,
 	.walk_lock		= PGWALK_RDLOCK,
 };
 
 static const struct mm_walk_ops smaps_shmem_walk_ops = {
-	.pmd_entry		= smaps_pte_range,
+	.pte_entry		= smaps_pte_entry,
+	.pmd_entry		= smaps_pmd_entry,
 	.hugetlb_entry		= smaps_hugetlb_range,
 	.pte_hole		= smaps_pte_hole,
 	.walk_lock		= PGWALK_RDLOCK,
@@ -1314,13 +1308,15 @@ static const struct mm_walk_ops smaps_shmem_walk_ops = {
 #ifdef CONFIG_PER_VMA_LOCK
 
 static const struct mm_walk_ops smaps_walk_vma_lock_ops = {
-	.pmd_entry		= smaps_pte_range,
+	.pte_entry		= smaps_pte_entry,
+	.pmd_entry		= smaps_pmd_entry,
 	.hugetlb_entry		= smaps_hugetlb_range,
 	.walk_lock		= PGWALK_VMA_RDLOCK_VERIFY,
 };
 
 static const struct mm_walk_ops smaps_shmem_walk_vma_lock_ops = {
-	.pmd_entry		= smaps_pte_range,
+	.pte_entry		= smaps_pte_entry,
+	.pmd_entry		= smaps_pmd_entry,
 	.hugetlb_entry		= smaps_hugetlb_range,
 	.pte_hole		= smaps_pte_hole,
 	.walk_lock		= PGWALK_VMA_RDLOCK_VERIFY,
