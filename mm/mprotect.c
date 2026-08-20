@@ -320,7 +320,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 		struct vm_area_struct *vma, pmd_t *pmd, unsigned long addr,
 		unsigned long end, pgprot_t newprot, unsigned long cp_flags)
 {
-	pte_t *pte, oldpte;
+	pte_t *start_pte, *pte, oldpte;
 	spinlock_t *ptl;
 	long pages = 0;
 	bool is_private_single_threaded;
@@ -329,8 +329,8 @@ static long change_pte_range(struct mmu_gather *tlb,
 	int nr_ptes;
 
 	tlb_change_page_size(tlb, PAGE_SIZE);
-	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
-	if (!pte)
+	start_pte = pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+	if (!start_pte)
 		return -EAGAIN;
 
 	if (prot_numa)
@@ -338,8 +338,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 
 	flush_tlb_batched_pending(vma->vm_mm);
 	lazy_mmu_mode_enable();
-	do {
-		nr_ptes = 1;
+	for_each_pte_range(pte, addr, end, nr_ptes, PAGE_SIZE) {
 		oldpte = ptep_get(pte);
 		if (pte_present(oldpte)) {
 			const fpb_t flags = FPB_RESPECT_SOFT_DIRTY | FPB_RESPECT_WRITE;
@@ -408,9 +407,9 @@ static long change_pte_range(struct mmu_gather *tlb,
 		} else  {
 			pages += change_softleaf_pte(vma, addr, pte, oldpte, cp_flags);
 		}
-	} while (pte += nr_ptes, addr += nr_ptes * PAGE_SIZE, addr != end);
+	}
 	lazy_mmu_mode_disable();
-	pte_unmap_unlock(pte - 1, ptl);
+	pte_unmap_unlock(start_pte, ptl);
 
 	return pages;
 }
