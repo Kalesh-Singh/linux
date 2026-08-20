@@ -3374,45 +3374,56 @@ static struct page *can_gather_numa_stats_pmd(pmd_t pmd,
 }
 #endif
 
-static int gather_pte_stats(pmd_t *pmd, unsigned long addr,
-		unsigned long end, struct mm_walk *walk)
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static bool gather_pmd_thp_stats(pmd_t *pmd, unsigned long addr,
+				 struct mm_walk *walk)
 {
 	struct numa_maps *md = walk->private;
 	struct vm_area_struct *vma = walk->vma;
 	spinlock_t *ptl;
-	pte_t *orig_pte;
-	pte_t *pte;
+	struct page *page;
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	ptl = pmd_trans_huge_lock(pmd, vma);
-	if (ptl) {
-		struct page *page;
+	if (!ptl)
+		return false;
 
-		page = can_gather_numa_stats_pmd(*pmd, vma, addr);
-		if (page)
-			gather_stats(page, md, pmd_dirty(*pmd),
-				     HPAGE_PMD_SIZE/PAGE_SIZE);
-		spin_unlock(ptl);
-		return 0;
-	}
+	page = can_gather_numa_stats_pmd(*pmd, vma, addr);
+	if (page)
+		gather_stats(page, md, pmd_dirty(*pmd),
+			     HPAGE_PMD_SIZE/PAGE_SIZE);
+	spin_unlock(ptl);
+	return true;
+}
+#else
+static inline bool gather_pmd_thp_stats(pmd_t *pmd, unsigned long addr,
+					struct mm_walk *walk)
+{
+	return false;
+}
 #endif
-	orig_pte = pte = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
-	if (!pte) {
-		walk->action = ACTION_AGAIN;
-		return 0;
-	}
-	do {
-		pte_t ptent = ptep_get(pte);
-		struct page *page = can_gather_numa_stats(ptent, vma, addr);
-		if (!page)
-			continue;
-		gather_stats(page, md, pte_dirty(ptent), 1);
 
-	} while (pte++, addr += PAGE_SIZE, addr != end);
-	pte_unmap_unlock(orig_pte, ptl);
-	cond_resched();
+static int gather_pmd_stats(pmd_t *pmd, unsigned long addr,
+			    unsigned long next, struct mm_walk *walk)
+{
+	if (gather_pmd_thp_stats(pmd, addr, walk))
+		walk->action = ACTION_CONTINUE;
+
 	return 0;
 }
+
+static int gather_pte_stats(pte_t *pte, unsigned long addr,
+			    unsigned long next, struct mm_walk *walk)
+{
+	struct numa_maps *md = walk->private;
+	struct vm_area_struct *vma = walk->vma;
+	pte_t ptent = ptep_get(pte);
+	struct page *page = can_gather_numa_stats(ptent, vma, addr);
+
+	if (page)
+		gather_stats(page, md, pte_dirty(ptent), 1);
+	return 0;
+}
+
 #ifdef CONFIG_HUGETLB_PAGE
 static int gather_hugetlb_stats(pte_t *pte, unsigned long hmask,
 		unsigned long addr, unsigned long end, struct mm_walk *walk)
@@ -3445,15 +3456,17 @@ static int gather_hugetlb_stats(pte_t *pte, unsigned long hmask,
 #endif
 
 static const struct mm_walk_ops show_numa_ops = {
+	.pte_entry = gather_pte_stats,
+	.pmd_entry = gather_pmd_stats,
 	.hugetlb_entry = gather_hugetlb_stats,
-	.pmd_entry = gather_pte_stats,
 	.walk_lock = PGWALK_RDLOCK,
 };
 
 #ifdef CONFIG_PER_VMA_LOCK
 static const struct mm_walk_ops show_numa_vma_lock_ops = {
+	.pte_entry = gather_pte_stats,
+	.pmd_entry = gather_pmd_stats,
 	.hugetlb_entry = gather_hugetlb_stats,
-	.pmd_entry = gather_pte_stats,
 	.walk_lock = PGWALK_VMA_RDLOCK_VERIFY,
 };
 
