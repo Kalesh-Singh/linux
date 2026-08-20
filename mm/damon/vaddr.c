@@ -266,30 +266,45 @@ lock_mmap:
 	mmap_read_unlock(mm);
 }
 
-static int damon_mkold_pmd_entry(pmd_t *pmd, unsigned long addr,
-		unsigned long next, struct mm_walk *walk)
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static bool damon_mkold_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+				      struct mm_walk *walk)
 {
-	pte_t *pte;
 	spinlock_t *ptl;
 
 	ptl = pmd_trans_huge_lock(pmd, walk->vma);
-	if (ptl) {
-		pmd_t pmde = pmdp_get(pmd);
+	if (!ptl)
+		return false;
 
-		if (pmd_present(pmde))
-			damon_pmdp_mkold(pmd, walk->vma, addr);
-		spin_unlock(ptl);
-		return 0;
-	}
+	pmd_t pmde = pmdp_get(pmd);
 
-	pte = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
-	if (!pte)
-		return 0;
+	if (pmd_present(pmde))
+		damon_pmdp_mkold(pmd, walk->vma, addr);
+	spin_unlock(ptl);
+	return true;
+}
+#else
+static inline bool damon_mkold_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+					     struct mm_walk *walk)
+{
+	return false;
+}
+#endif
+
+static int damon_mkold_pmd_entry(pmd_t *pmd, unsigned long addr,
+		unsigned long next, struct mm_walk *walk)
+{
+	if (damon_mkold_pmd_thp_entry(pmd, addr, walk))
+		walk->action = ACTION_CONTINUE;
+	return 0;
+}
+
+static int damon_mkold_pte_entry(pte_t *pte, unsigned long addr,
+		unsigned long next, struct mm_walk *walk)
+{
 	if (!pte_present(ptep_get(pte)))
-		goto out;
+		return 0;
 	damon_ptep_mkold(pte, walk->vma, addr);
-out:
-	pte_unmap_unlock(pte, ptl);
 	return 0;
 }
 
@@ -348,6 +363,7 @@ static void damon_va_mkold(struct mm_struct *mm, unsigned long addr)
 {
 	struct mm_walk_ops damon_mkold_ops = {
 		.pmd_entry = damon_mkold_pmd_entry,
+		.pte_entry = damon_mkold_pte_entry,
 		.hugetlb_entry = damon_mkold_hugetlb_entry,
 	};
 
@@ -389,51 +405,64 @@ struct damon_young_walk_private {
 	bool young;
 };
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static bool damon_young_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+				      struct mm_walk *walk)
+{
+	struct damon_young_walk_private *priv = walk->private;
+	spinlock_t *ptl = pmd_trans_huge_lock(pmd, walk->vma);
+	struct folio *folio;
+	pmd_t pmde;
+
+	if (!ptl)
+		return false;
+
+	pmde = pmdp_get(pmd);
+	if (!pmd_present(pmde))
+		goto huge_out;
+	folio = vm_normal_folio_pmd(walk->vma, addr, pmde);
+	if (!folio)
+		goto huge_out;
+	if (pmd_young(pmde) || !folio_test_idle(folio) ||
+	    mmu_notifier_test_young(walk->mm, addr))
+		priv->young = true;
+	*priv->folio_sz = HPAGE_PMD_SIZE;
+huge_out:
+	spin_unlock(ptl);
+	return true;
+}
+#else
+static inline bool damon_young_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+					     struct mm_walk *walk)
+{
+	return false;
+}
+#endif
+
 static int damon_young_pmd_entry(pmd_t *pmd, unsigned long addr,
 		unsigned long next, struct mm_walk *walk)
 {
-	pte_t *pte;
-	pte_t ptent;
-	spinlock_t *ptl;
-	struct folio *folio;
+	if (damon_young_pmd_thp_entry(pmd, addr, walk))
+		walk->action = ACTION_CONTINUE;
+	return 0;
+}
+
+static int damon_young_pte_entry(pte_t *pte, unsigned long addr,
+		unsigned long next, struct mm_walk *walk)
+{
 	struct damon_young_walk_private *priv = walk->private;
+	pte_t ptent = ptep_get(pte);
+	struct folio *folio;
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-	ptl = pmd_trans_huge_lock(pmd, walk->vma);
-	if (ptl) {
-		pmd_t pmde = pmdp_get(pmd);
-
-		if (!pmd_present(pmde))
-			goto huge_out;
-		folio = vm_normal_folio_pmd(walk->vma, addr, pmde);
-		if (!folio)
-			goto huge_out;
-		if (pmd_young(pmde) || !folio_test_idle(folio) ||
-					mmu_notifier_test_young(walk->mm,
-						addr))
-			priv->young = true;
-		*priv->folio_sz = HPAGE_PMD_SIZE;
-huge_out:
-		spin_unlock(ptl);
-		return 0;
-	}
-#endif	/* CONFIG_TRANSPARENT_HUGEPAGE */
-
-	pte = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
-	if (!pte)
-		return 0;
-	ptent = ptep_get(pte);
 	if (!pte_present(ptent))
-		goto out;
+		return 0;
 	folio = vm_normal_folio(walk->vma, addr, ptent);
 	if (!folio)
-		goto out;
+		return 0;
 	if (pte_young(ptent) || !folio_test_idle(folio) ||
-			mmu_notifier_test_young(walk->mm, addr))
+	    mmu_notifier_test_young(walk->mm, addr))
 		priv->young = true;
 	*priv->folio_sz = folio_size(folio);
-out:
-	pte_unmap_unlock(pte, ptl);
 	return 0;
 }
 
@@ -481,6 +510,7 @@ static bool damon_va_young(struct mm_struct *mm, unsigned long addr,
 
 	struct mm_walk_ops damon_young_ops = {
 		.pmd_entry = damon_young_pmd_entry,
+		.pte_entry = damon_young_pte_entry,
 		.hugetlb_entry = damon_young_hugetlb_entry,
 	};
 
@@ -655,58 +685,73 @@ isolate:
 	list_add(&folio->lru, &migration_lists[i]);
 }
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static bool damos_va_migrate_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+					   struct mm_walk *walk)
+{
+	struct damos_va_migrate_private *priv = walk->private;
+	struct list_head *migration_lists = priv->migration_lists;
+	struct damos *s = priv->scheme;
+	struct damos_migrate_dests *dests = &s->migrate_dests;
+	spinlock_t *ptl = pmd_trans_huge_lock(pmd, walk->vma);
+	struct folio *folio;
+	pmd_t pmde;
+
+	if (!ptl)
+		return false;
+
+	pmde = pmdp_get(pmd);
+	if (!pmd_present(pmde))
+		goto huge_out;
+	folio = vm_normal_folio_pmd(walk->vma, addr, pmde);
+	if (!folio)
+		goto huge_out;
+	if (damos_va_filter_out(s, folio, walk->vma, addr, NULL, pmd))
+		goto huge_out;
+	damos_va_migrate_dests_add(folio, walk->vma, addr, dests,
+			migration_lists);
+huge_out:
+	spin_unlock(ptl);
+	return true;
+}
+#else
+static inline bool damos_va_migrate_pmd_thp_entry(pmd_t *pmd,
+						  unsigned long addr,
+						  struct mm_walk *walk)
+{
+	return false;
+}
+#endif
+
 static int damos_va_migrate_pmd_entry(pmd_t *pmd, unsigned long addr,
+		unsigned long next, struct mm_walk *walk)
+{
+	if (damos_va_migrate_pmd_thp_entry(pmd, addr, walk))
+		walk->action = ACTION_CONTINUE;
+	return 0;
+}
+
+static int damos_va_migrate_pte_entry(pte_t *pte, unsigned long addr,
 		unsigned long next, struct mm_walk *walk)
 {
 	struct damos_va_migrate_private *priv = walk->private;
 	struct list_head *migration_lists = priv->migration_lists;
 	struct damos *s = priv->scheme;
 	struct damos_migrate_dests *dests = &s->migrate_dests;
+	pte_t ptent = ptep_get(pte);
 	struct folio *folio;
-	spinlock_t *ptl;
-	pte_t *start_pte, *pte, ptent;
-	int nr;
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-	ptl = pmd_trans_huge_lock(pmd, walk->vma);
-	if (ptl) {
-		pmd_t pmde = pmdp_get(pmd);
-
-		if (!pmd_present(pmde))
-			goto huge_out;
-		folio = vm_normal_folio_pmd(walk->vma, addr, pmde);
-		if (!folio)
-			goto huge_out;
-		if (damos_va_filter_out(s, folio, walk->vma, addr, NULL, pmd))
-			goto huge_out;
-		damos_va_migrate_dests_add(folio, walk->vma, addr, dests,
-				migration_lists);
-huge_out:
-		spin_unlock(ptl);
+	if (pte_none(ptent) || !pte_present(ptent))
 		return 0;
-	}
-#endif	/* CONFIG_TRANSPARENT_HUGEPAGE */
-
-	start_pte = pte = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
-	if (!pte)
+	folio = vm_normal_folio(walk->vma, addr, ptent);
+	if (!folio)
 		return 0;
-
-	for (; addr < next; pte += nr, addr += nr * PAGE_SIZE) {
-		nr = 1;
-		ptent = ptep_get(pte);
-
-		if (pte_none(ptent) || !pte_present(ptent))
-			continue;
-		folio = vm_normal_folio(walk->vma, addr, ptent);
-		if (!folio)
-			continue;
-		if (damos_va_filter_out(s, folio, walk->vma, addr, pte, NULL))
-			continue;
-		damos_va_migrate_dests_add(folio, walk->vma, addr, dests,
-				migration_lists);
-		nr = folio_nr_pages(folio);
-	}
-	pte_unmap_unlock(start_pte, ptl);
+	if (damos_va_filter_out(s, folio, walk->vma, addr, pte, NULL))
+		return 0;
+	damos_va_migrate_dests_add(folio, walk->vma, addr, dests,
+			migration_lists);
+	if (folio_test_large(folio))
+		walk->step = folio_nr_pages(folio);
 	return 0;
 }
 
@@ -772,7 +817,7 @@ static unsigned long damos_va_migrate(struct damon_target *target,
 	struct damos_migrate_dests *dests = &s->migrate_dests;
 	struct mm_walk_ops walk_ops = {
 		.pmd_entry = damos_va_migrate_pmd_entry,
-		.pte_entry = NULL,
+		.pte_entry = damos_va_migrate_pte_entry,
 	};
 
 	use_target_nid = dests->nr_dests == 0;
@@ -815,62 +860,77 @@ static inline bool damos_va_invalid_folio(struct folio *folio,
 	return !folio || folio == s->last_applied;
 }
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static bool damos_va_stat_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+					struct mm_walk *walk)
+{
+	struct damos_va_stat_private *priv = walk->private;
+	struct damos *s = priv->scheme;
+	unsigned long *sz_filter_passed = priv->sz_filter_passed;
+	struct vm_area_struct *vma = walk->vma;
+	spinlock_t *ptl = pmd_trans_huge_lock(pmd, vma);
+	struct folio *folio;
+	pmd_t pmde;
+
+	if (!ptl)
+		return false;
+
+	pmde = pmdp_get(pmd);
+	if (!pmd_present(pmde))
+		goto huge_unlock;
+
+	folio = vm_normal_folio_pmd(vma, addr, pmde);
+
+	if (damos_va_invalid_folio(folio, s))
+		goto huge_unlock;
+
+	if (!damos_va_filter_out(s, folio, vma, addr, NULL, pmd))
+		*sz_filter_passed += folio_size(folio);
+	s->last_applied = folio;
+
+huge_unlock:
+	spin_unlock(ptl);
+	return true;
+}
+#else
+static inline bool damos_va_stat_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
+					       struct mm_walk *walk)
+{
+	return false;
+}
+#endif
+
 static int damos_va_stat_pmd_entry(pmd_t *pmd, unsigned long addr,
+		unsigned long next, struct mm_walk *walk)
+{
+	if (damos_va_stat_pmd_thp_entry(pmd, addr, walk))
+		walk->action = ACTION_CONTINUE;
+	return 0;
+}
+
+static int damos_va_stat_pte_entry(pte_t *pte, unsigned long addr,
 		unsigned long next, struct mm_walk *walk)
 {
 	struct damos_va_stat_private *priv = walk->private;
 	struct damos *s = priv->scheme;
 	unsigned long *sz_filter_passed = priv->sz_filter_passed;
 	struct vm_area_struct *vma = walk->vma;
+	pte_t ptent = ptep_get(pte);
 	struct folio *folio;
-	spinlock_t *ptl;
-	pte_t *start_pte, *pte, ptent;
-	int nr;
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-	ptl = pmd_trans_huge_lock(pmd, vma);
-	if (ptl) {
-		pmd_t pmde = pmdp_get(pmd);
-
-		if (!pmd_present(pmde))
-			goto huge_unlock;
-
-		folio = vm_normal_folio_pmd(vma, addr, pmde);
-
-		if (damos_va_invalid_folio(folio, s))
-			goto huge_unlock;
-
-		if (!damos_va_filter_out(s, folio, vma, addr, NULL, pmd))
-			*sz_filter_passed += folio_size(folio);
-		s->last_applied = folio;
-
-huge_unlock:
-		spin_unlock(ptl);
-		return 0;
-	}
-#endif
-	start_pte = pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
-	if (!start_pte)
+	if (pte_none(ptent) || !pte_present(ptent))
 		return 0;
 
-	for (; addr < next; pte += nr, addr += nr * PAGE_SIZE) {
-		nr = 1;
-		ptent = ptep_get(pte);
+	folio = vm_normal_folio(vma, addr, ptent);
 
-		if (pte_none(ptent) || !pte_present(ptent))
-			continue;
+	if (damos_va_invalid_folio(folio, s))
+		return 0;
 
-		folio = vm_normal_folio(vma, addr, ptent);
-
-		if (damos_va_invalid_folio(folio, s))
-			continue;
-
-		if (!damos_va_filter_out(s, folio, vma, addr, pte, NULL))
-			*sz_filter_passed += folio_size(folio);
-		nr = folio_nr_pages(folio);
-		s->last_applied = folio;
-	}
-	pte_unmap_unlock(start_pte, ptl);
+	if (!damos_va_filter_out(s, folio, vma, addr, pte, NULL))
+		*sz_filter_passed += folio_size(folio);
+	if (folio_test_large(folio))
+		walk->step = folio_nr_pages(folio);
+	s->last_applied = folio;
 	return 0;
 }
 
@@ -882,6 +942,7 @@ static unsigned long damos_va_stat(struct damon_target *target,
 	struct mm_struct *mm;
 	struct mm_walk_ops walk_ops = {
 		.pmd_entry = damos_va_stat_pmd_entry,
+		.pte_entry = damos_va_stat_pte_entry,
 	};
 
 	priv.scheme = s;
