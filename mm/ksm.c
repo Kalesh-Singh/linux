@@ -607,60 +607,61 @@ static inline bool ksm_test_exit(struct mm_struct *mm)
 	return atomic_read(&mm->mm_users) == 0;
 }
 
-static int break_ksm_pmd_entry(pmd_t *pmdp, unsigned long addr, unsigned long end,
-			struct mm_walk *walk)
+static int break_ksm_pmd_entry(pmd_t *pmdp, unsigned long addr,
+			       unsigned long next, struct mm_walk *walk)
 {
-	unsigned long *found_addr = (unsigned long *) walk->private;
-	struct mm_struct *mm = walk->mm;
-	pte_t *start_ptep, *ptep;
-	spinlock_t *ptl;
-	int found = 0;
-
 	if (ksm_test_exit(walk->mm))
 		return 0;
 	if (signal_pending(current))
 		return -ERESTARTSYS;
-
-	start_ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-	if (!start_ptep)
+	if (pmd_trans_huge(*pmdp) || !pmd_present(*pmdp)) {
+		walk->action = ACTION_CONTINUE;
 		return 0;
-
-	for (ptep = start_ptep; addr < end; ptep++, addr += PAGE_SIZE) {
-		pte_t pte = ptep_get(ptep);
-		struct folio *folio = NULL;
-
-		if (pte_present(pte)) {
-			folio = vm_normal_folio(walk->vma, addr, pte);
-		} else if (!pte_none(pte)) {
-			const softleaf_t entry = softleaf_from_pte(pte);
-
-			/*
-			 * As KSM pages remain KSM pages until freed, no need to wait
-			 * here for migration to end.
-			 */
-			if (softleaf_is_migration(entry))
-				folio = softleaf_to_folio(entry);
-		}
-		/* return 1 if the page is an normal ksm page or KSM-placed zero page */
-		found = (folio && folio_test_ksm(folio)) ||
-			(pte_present(pte) && is_ksm_zero_pte(pte));
-		if (found) {
-			*found_addr = addr;
-			goto out_unlock;
-		}
 	}
-out_unlock:
-	pte_unmap_unlock(start_ptep, ptl);
-	return found;
+	return 0;
+}
+
+static int break_ksm_pte_entry(pte_t *ptep, unsigned long addr,
+			       unsigned long next, struct mm_walk *walk)
+{
+	unsigned long *found_addr = (unsigned long *)walk->private;
+	pte_t pte = ptep_get(ptep);
+	struct folio *folio = NULL;
+	int found;
+
+	if (pte_present(pte)) {
+		folio = vm_normal_folio(walk->vma, addr, pte);
+	} else if (!pte_none(pte)) {
+		const softleaf_t entry = softleaf_from_pte(pte);
+
+		/*
+		 * As KSM pages remain KSM pages until freed, no need to wait
+		 * here for migration to end.
+		 */
+		if (softleaf_is_migration(entry))
+			folio = softleaf_to_folio(entry);
+	}
+
+	/* return 1 if the page is a normal ksm page or KSM-placed zero page */
+	found = (folio && folio_test_ksm(folio)) ||
+		(pte_present(pte) && is_ksm_zero_pte(pte));
+	if (found) {
+		*found_addr = addr;
+		return 1;
+	}
+
+	return 0;
 }
 
 static const struct mm_walk_ops break_ksm_ops = {
 	.pmd_entry = break_ksm_pmd_entry,
+	.pte_entry = break_ksm_pte_entry,
 	.walk_lock = PGWALK_RDLOCK,
 };
 
 static const struct mm_walk_ops break_ksm_lock_vma_ops = {
 	.pmd_entry = break_ksm_pmd_entry,
+	.pte_entry = break_ksm_pte_entry,
 	.walk_lock = PGWALK_WRLOCK,
 };
 
