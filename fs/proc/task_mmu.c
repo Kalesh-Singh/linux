@@ -2172,48 +2172,53 @@ populate_pagemap:
 	}
 	return err;
 }
-#endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
-static int pagemap_pmd_range(pmd_t *pmdp, unsigned long addr, unsigned long end,
-			     struct mm_walk *walk)
+static bool pagemap_pmd_thp_entry(pmd_t *pmdp, unsigned long addr,
+				  unsigned long end, struct vm_area_struct *vma,
+				  struct pagemapread *pm, int *err)
+{
+	spinlock_t *ptl;
+
+	ptl = pmd_trans_huge_lock(pmdp, vma);
+	if (!ptl)
+		return false;
+
+	*err = pagemap_pmd_range_thp(pmdp, addr, end, vma, pm);
+	spin_unlock(ptl);
+	return true;
+}
+#else
+static inline bool pagemap_pmd_thp_entry(pmd_t *pmdp, unsigned long addr,
+					 unsigned long end, struct vm_area_struct *vma,
+					 struct pagemapread *pm, int *err)
+{
+	return false;
+}
+#endif
+
+static int pagemap_pmd_entry(pmd_t *pmdp, unsigned long addr,
+			     unsigned long next, struct mm_walk *walk)
+{
+	struct pagemapread *pm = walk->private;
+	int err = 0;
+
+	if (pagemap_pmd_thp_entry(pmdp, addr, next, walk->vma, pm, &err)) {
+		walk->action = ACTION_CONTINUE;
+		return err;
+	}
+
+	return 0;
+}
+
+static int pagemap_pte_entry(pte_t *pte, unsigned long addr,
+			     unsigned long next, struct mm_walk *walk)
 {
 	struct vm_area_struct *vma = walk->vma;
 	struct pagemapread *pm = walk->private;
-	spinlock_t *ptl;
-	pte_t *pte, *orig_pte;
-	int err = 0;
+	pagemap_entry_t pme;
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-	ptl = pmd_trans_huge_lock(pmdp, vma);
-	if (ptl) {
-		err = pagemap_pmd_range_thp(pmdp, addr, end, vma, pm);
-		spin_unlock(ptl);
-		return err;
-	}
-#endif
-
-	/*
-	 * We can assume that @vma always points to a valid one and @end never
-	 * goes beyond vma->vm_end.
-	 */
-	orig_pte = pte = pte_offset_map_lock(walk->mm, pmdp, addr, &ptl);
-	if (!pte) {
-		walk->action = ACTION_AGAIN;
-		return err;
-	}
-	for (; addr < end; pte++, addr += PAGE_SIZE) {
-		pagemap_entry_t pme;
-
-		pme = pte_to_pagemap_entry(pm, vma, addr, ptep_get(pte));
-		err = add_to_pagemap(&pme, pm);
-		if (err)
-			break;
-	}
-	pte_unmap_unlock(orig_pte, ptl);
-
-	cond_resched();
-
-	return err;
+	pme = pte_to_pagemap_entry(pm, vma, addr, ptep_get(pte));
+	return add_to_pagemap(&pme, pm);
 }
 
 #ifdef CONFIG_HUGETLB_PAGE
@@ -2275,7 +2280,8 @@ static int pagemap_hugetlb_range(pte_t *ptep, unsigned long hmask,
 #endif /* HUGETLB_PAGE */
 
 static const struct mm_walk_ops pagemap_ops = {
-	.pmd_entry	= pagemap_pmd_range,
+	.pte_entry	= pagemap_pte_entry,
+	.pmd_entry	= pagemap_pmd_entry,
 	.pte_hole	= pagemap_pte_hole,
 	.hugetlb_entry	= pagemap_hugetlb_range,
 	.walk_lock	= PGWALK_RDLOCK,
