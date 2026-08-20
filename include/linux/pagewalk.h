@@ -91,6 +91,7 @@ struct mm_walk_ops {
 	int (*install_pte)(unsigned long addr, unsigned long next,
 			   pte_t *ptep, struct mm_walk *walk);
 	enum page_walk_lock walk_lock;
+	unsigned long pte_size;
 };
 
 /*
@@ -115,6 +116,8 @@ enum page_walk_action {
  * @action:	next action to perform (see enum page_walk_action)
  * @no_vma:	walk ignoring vmas (vma will always be NULL)
  * @private:	private data for callbacks' usage
+ * @pte_size:	virtual address span per leaf PTE (defaults to PAGE_SIZE if 0)
+ * @step:	number of leaf PTEs to advance in this step (reset to 1 before each callback)
  *
  * (see the comment on walk_page_range() for more details)
  */
@@ -126,7 +129,14 @@ struct mm_walk {
 	enum page_walk_action action;
 	bool no_vma;
 	void *private;
+	unsigned long pte_size;
+	unsigned int step;
 };
+
+static inline unsigned long mm_walk_pte_size(const struct mm_walk *walk)
+{
+	return walk->pte_size ? walk->pte_size : PAGE_SIZE;
+}
 
 int walk_page_range(struct mm_struct *mm, unsigned long start,
 		unsigned long end, const struct mm_walk_ops *ops,
