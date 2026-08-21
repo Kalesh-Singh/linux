@@ -1623,6 +1623,17 @@ static inline unsigned long vma_kernel_pagesize(struct vm_area_struct *vma)
 	return PAGE_SIZE;
 }
 
+/**
+ * vma_file_offset - Calculate starting byte offset into file mapping for this VMA.
+ * @vma: The file-backed memory area.
+ *
+ * Return: The byte offset into the underlying file where this VMA starts.
+ */
+static inline loff_t vma_file_offset(const struct vm_area_struct *vma)
+{
+	return (loff_t)vma->vm_pgoff << PAGE_SHIFT;
+}
+
 unsigned long vma_mmu_pagesize(struct vm_area_struct *vma);
 
 static inline
