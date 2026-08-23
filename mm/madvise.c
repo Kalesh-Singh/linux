@@ -985,7 +985,7 @@ static long madvise_populate(struct madvise_behavior *madv_behavior)
 				return -ENOMEM;
 			}
 		}
-		start += pages * PAGE_SIZE;
+		start += pages * mm_pte_size(mm);
 	}
 	return 0;
 }
@@ -1831,18 +1831,19 @@ static void madvise_finish_tlb(struct madvise_behavior *madv_behavior)
 
 /**
  * check_input_range() - Check if the requested range is valid.
+ * @mm:		Memory descriptor.
  * @start:	Start address of madvise-requested address range.
  * @len_in:	Length of madvise-requested address range.
  *
  * Returns: 0 if the input range is valid, otherwise an error code.
  */
-static int check_input_range(unsigned long start, size_t len_in)
+static int check_input_range(struct mm_struct *mm, unsigned long start, size_t len_in)
 {
 	size_t len;
 
-	if (!PAGE_ALIGNED(start))
+	if (!mm_pte_aligned(mm, start))
 		return -EINVAL;
-	len = PAGE_ALIGN(len_in);
+	len = mm_pte_align(mm, len_in);
 
 	/* Check to see whether len was rounded up from small -ve to zero */
 	if (len_in && !len)
@@ -1894,7 +1895,7 @@ static int madvise_do_behavior(unsigned long start, size_t len_in,
 	}
 
 	range->start = get_untagged_addr(madv_behavior->mm, start);
-	range->end = range->start + PAGE_ALIGN(len_in);
+	range->end = range->start + mm_pte_align(madv_behavior->mm, len_in);
 
 	blk_start_plug(&plug);
 	if (is_madvise_populate(madv_behavior))
@@ -1990,7 +1991,7 @@ int do_madvise(struct mm_struct *mm, unsigned long start, size_t len_in, int beh
 	if (!madvise_behavior_valid(behavior))
 		return -EINVAL;
 
-	error = check_input_range(start, len_in);
+	error = check_input_range(mm, start, len_in);
 	if (error || !len_in)
 		return error;
 
@@ -2035,7 +2036,7 @@ static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 		size_t len_in = iter_iov_len(iter);
 		int error;
 
-		error = check_input_range(start, len_in);
+		error = check_input_range(mm, start, len_in);
 		if (error || !len_in)
 			ret = error;
 		else
