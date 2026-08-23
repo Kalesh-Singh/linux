@@ -328,7 +328,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 	bool uffd_wp = cp_flags & MM_CP_UFFD_WP;
 	int nr_ptes;
 
-	tlb_change_page_size(tlb, PAGE_SIZE);
+	tlb_change_page_size(tlb, mm_pte_size(vma->vm_mm));
 	start_pte = pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
 	if (!start_pte)
 		return -EAGAIN;
@@ -338,11 +338,11 @@ static long change_pte_range(struct mmu_gather *tlb,
 
 	flush_tlb_batched_pending(vma->vm_mm);
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, nr_ptes, PAGE_SIZE) {
+	for_each_pte_range(pte, addr, end, nr_ptes, mm_pte_size(vma->vm_mm)) {
 		oldpte = ptep_get(pte);
 		if (pte_present(oldpte)) {
 			const fpb_t flags = FPB_RESPECT_SOFT_DIRTY | FPB_RESPECT_WRITE;
-			int max_nr_ptes = (end - addr) >> PAGE_SHIFT;
+			int max_nr_ptes = (end - addr) >> mm_pte_shift(vma->vm_mm);
 			struct folio *folio = NULL;
 			struct page *page;
 
@@ -850,11 +850,11 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 	if (grows == (PROT_GROWSDOWN|PROT_GROWSUP)) /* can't be both */
 		return -EINVAL;
 
-	if (start & ~PAGE_MASK)
+	if (!mm_pte_aligned(current->mm, start))
 		return -EINVAL;
 	if (!len)
 		return 0;
-	len = PAGE_ALIGN(len);
+	len = mm_pte_align(current->mm, len);
 	end = start + len;
 	if (end <= start)
 		return -ENOMEM;
