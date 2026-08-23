@@ -1316,7 +1316,7 @@ again:
 			WARN_ON_ONCE(ret != -ENOENT);
 		}
 		/* copy_present_ptes() will clear `*prealloc' if consumed */
-		max_nr = (end - addr) / PAGE_SIZE;
+		max_nr = (end - addr) / mm_pte_size(src_vma->vm_mm);
 		ret = copy_present_ptes(dst_vma, src_vma, dst_pte, src_pte,
 					ptent, addr, max_nr, rss, &prealloc);
 		/*
@@ -1338,7 +1338,7 @@ again:
 		}
 		nr = ret;
 		progress += 8 * nr;
-	} while (dst_pte += nr, src_pte += nr, addr += PAGE_SIZE * nr,
+	} while (dst_pte += nr, src_pte += nr, addr += mm_pte_size(src_vma->vm_mm) * nr,
 		 addr != end);
 
 	lazy_mmu_mode_disable();
@@ -1811,7 +1811,7 @@ static inline int do_zap_pte_range(struct mmu_gather *tlb,
 				   bool *any_skipped)
 {
 	pte_t ptent = ptep_get(pte);
-	int max_nr = (end - addr) / PAGE_SIZE;
+	int max_nr = (end - addr) / mm_pte_size(vma->vm_mm);
 	int nr = 0;
 
 	/* Skip all consecutive none ptes */
@@ -1825,7 +1825,7 @@ static inline int do_zap_pte_range(struct mmu_gather *tlb,
 		if (!max_nr)
 			return nr;
 		pte += nr;
-		addr += nr * PAGE_SIZE;
+		addr += nr * mm_pte_size(vma->vm_mm);
 	}
 
 	if (pte_present(ptent))
@@ -1915,7 +1915,7 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	int nr;
 
 retry:
-	tlb_change_page_size(tlb, PAGE_SIZE);
+	tlb_change_page_size(tlb, mm_pte_size(mm));
 	init_rss_vec(rss);
 	start_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	if (!pte)
@@ -1923,7 +1923,7 @@ retry:
 
 	flush_tlb_batched_pending(mm);
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, nr, PAGE_SIZE) {
+	for_each_pte_range(pte, addr, end, nr, mm_pte_size(mm)) {
 		bool any_skipped = false;
 
 		if (need_resched()) {
@@ -1936,7 +1936,7 @@ retry:
 		if (any_skipped)
 			can_reclaim_pt = false;
 		if (unlikely(force_break)) {
-			addr += nr * PAGE_SIZE;
+			addr += nr * mm_pte_size(mm);
 			direct_reclaim = false;
 			break;
 		}
@@ -2921,7 +2921,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	if (!pte)
 		return -ENOMEM;
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, step, PAGE_SIZE) {
+	for_each_pte_range(pte, addr, end, step, mm_pte_size(mm)) {
 		BUG_ON(!pte_none(ptep_get(pte)));
 		if (!pfn_modify_allowed(pfn, prot)) {
 			err = -EACCES;
@@ -3335,7 +3335,7 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	lazy_mmu_mode_enable();
 
 	if (fn) {
-		for_each_pte_range(pte, addr, end, step, PAGE_SIZE) {
+		for_each_pte_range(pte, addr, end, step, mm_pte_size(mm)) {
 			if (create || !pte_none(ptep_get(pte))) {
 				err = fn(pte, addr, data);
 				if (err)
