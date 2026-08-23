@@ -151,8 +151,8 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 			      mm->end_data, mm->start_data))
 		goto out;
 
-	newbrk = PAGE_ALIGN(brk);
-	oldbrk = PAGE_ALIGN(mm->brk);
+	newbrk = mm_pte_align(mm, brk);
+	oldbrk = mm_pte_align(mm, mm->brk);
 	if (oldbrk == newbrk) {
 		mm->brk = brk;
 		goto success;
@@ -186,8 +186,8 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	 * expansion area
 	 */
 	vma_iter_init(&vmi, mm, oldbrk);
-	next = vma_find(&vmi, newbrk + PAGE_SIZE + stack_guard_gap);
-	if (next && newbrk + PAGE_SIZE > vm_start_gap(next))
+	next = vma_find(&vmi, newbrk + mm_pte_size(mm) + stack_guard_gap);
+	if (next && newbrk + mm_pte_size(mm) > vm_start_gap(next))
 		goto out;
 
 	brkvma = vma_prev_limit(&vmi, mm->start_brk);
@@ -220,10 +220,10 @@ out:
  */
 static inline unsigned long round_hint_to_min(unsigned long hint)
 {
-	hint &= PAGE_MASK;
+	hint = mm_pte_align_down(current->mm, hint);
 	if (((void *)hint != NULL) &&
 	    (hint < mmap_min_addr))
-		return PAGE_ALIGN(mmap_min_addr);
+		return mm_pte_align(current->mm, mmap_min_addr);
 	return hint;
 }
 
@@ -235,11 +235,11 @@ bool mlock_future_ok(const struct mm_struct *mm, bool is_vma_locked,
 	if (!is_vma_locked || capable(CAP_IPC_LOCK))
 		return true;
 
-	locked_pages = bytes >> PAGE_SHIFT;
+	locked_pages = bytes >> mm_pte_shift(mm);
 	locked_pages += mm->locked_vm;
 
 	limit_pages = rlimit(RLIMIT_MEMLOCK);
-	limit_pages >>= PAGE_SHIFT;
+	limit_pages >>= mm_pte_shift(mm);
 
 	return locked_pages <= limit_pages;
 }
@@ -857,7 +857,7 @@ __get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 
 	if (addr > TASK_SIZE - len)
 		return -ENOMEM;
-	if (offset_in_page(addr))
+	if (!mm_pte_aligned(current->mm, addr))
 		return -EINVAL;
 
 	error = security_mmap_addr(addr);
@@ -1099,14 +1099,14 @@ SYSCALL_DEFINE5(remap_file_pages, unsigned long, start, unsigned long, size,
 
 	if (prot)
 		return ret;
-	start = start & PAGE_MASK;
-	size = size & PAGE_MASK;
+	start = mm_pte_align_down(mm, start);
+	size = mm_pte_align_down(mm, size);
 
 	if (start + size <= start)
 		return ret;
 
 	/* Does pgoff wrap? */
-	if (pgoff + (size >> PAGE_SHIFT) < pgoff)
+	if (pgoff + (size >> mm_pte_shift(mm)) < pgoff)
 		return ret;
 
 	if (mmap_read_lock_killable(mm))
