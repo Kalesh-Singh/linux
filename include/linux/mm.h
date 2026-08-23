@@ -3080,6 +3080,51 @@ extern void pagefault_out_of_memory(void);
 
 #define offset_in_page(p)	((unsigned long)(p) & ~PAGE_MASK)
 #define offset_in_folio(folio, p) ((unsigned long)(p) & (folio_size(folio) - 1))
+#define offset_in_pte(p, pte_size) ((unsigned long)(p) & ((pte_size) - 1))
+#define folio_nr_ptes(folio, pte_size) ((unsigned long)folio_size(folio) / (pte_size))
+
+/*
+ * Dynamic mm_struct geometry accessors
+ */
+static __always_inline unsigned int mm_pte_shift(const struct mm_struct *mm)
+{
+	return PAGE_SHIFT;
+}
+
+static __always_inline unsigned long mm_pte_size(const struct mm_struct *mm)
+{
+	return 1UL << mm_pte_shift(mm);
+}
+
+static __always_inline unsigned long mm_pte_mask(const struct mm_struct *mm)
+{
+	return ~(mm_pte_size(mm) - 1);
+}
+
+static __always_inline unsigned long mm_offset_in_pte(const struct mm_struct *mm, unsigned long addr)
+{
+	return addr & (mm_pte_size(mm) - 1);
+}
+
+static __always_inline unsigned long mm_pte_align(const struct mm_struct *mm, unsigned long val)
+{
+	return ALIGN(val, mm_pte_size(mm));
+}
+
+static __always_inline unsigned long mm_pte_align_down(const struct mm_struct *mm, unsigned long val)
+{
+	return ALIGN_DOWN(val, mm_pte_size(mm));
+}
+
+static __always_inline bool mm_pte_aligned(const struct mm_struct *mm, unsigned long val)
+{
+	return !(val & (mm_pte_size(mm) - 1));
+}
+
+static __always_inline unsigned long mm_folio_nr_ptes(const struct mm_struct *mm, const struct folio *folio)
+{
+	return folio_size(folio) >> mm_pte_shift(mm);
+}
 
 /*
  * Parameter block passed down to zap_pte_range in exceptional cases.
