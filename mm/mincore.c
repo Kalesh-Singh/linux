@@ -48,7 +48,7 @@ static int mincore_hugetlb(pte_t *pte, unsigned long hmask, unsigned long addr,
 			present = 1;
 	}
 
-	for (; addr != end; vec++, addr += PAGE_SIZE)
+	for (; addr != end; vec++, addr += mm_pte_size(walk->mm))
 		*vec = present;
 	walk->private = vec;
 	spin_unlock(ptl);
@@ -135,7 +135,7 @@ static unsigned char mincore_page(struct address_space *mapping, pgoff_t index)
 static int __mincore_unmapped_range(unsigned long addr, unsigned long end,
 				struct vm_area_struct *vma, unsigned char *vec)
 {
-	unsigned long nr = (end - addr) >> PAGE_SHIFT;
+	unsigned long nr = (end - addr) >> mm_pte_shift(vma->vm_mm);
 	int i;
 
 	if (vma->vm_file) {
@@ -166,7 +166,7 @@ static bool mincore_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
 {
 	struct vm_area_struct *vma = walk->vma;
 	unsigned char *vec = walk->private;
-	int nr = (next - addr) >> PAGE_SHIFT;
+	int nr = (next - addr) >> mm_pte_shift(walk->mm);
 	spinlock_t *ptl;
 
 	ptl = pmd_trans_huge_lock(pmd, vma);
@@ -254,16 +254,16 @@ static long do_mincore(unsigned long addr, unsigned long pages, unsigned char *v
 	vma = vma_lookup(current->mm, addr);
 	if (!vma)
 		return -ENOMEM;
-	end = min(vma->vm_end, addr + (pages << PAGE_SHIFT));
+	end = min(vma->vm_end, addr + (pages << mm_pte_shift(current->mm)));
 	if (!can_do_mincore(vma)) {
-		unsigned long pages = DIV_ROUND_UP(end - addr, PAGE_SIZE);
+		unsigned long pages = DIV_ROUND_UP(end - addr, mm_pte_size(current->mm));
 		memset(vec, 1, pages);
 		return pages;
 	}
 	err = walk_page_range(vma->vm_mm, addr, end, &mincore_walk_ops, vec);
 	if (err < 0)
 		return err;
-	return (end - addr) >> PAGE_SHIFT;
+	return (end - addr) >> mm_pte_shift(current->mm);
 }
 
 /*
@@ -300,7 +300,7 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 	start = untagged_addr(start);
 
 	/* Check the start address: needs to be page-aligned.. */
-	if (unlikely(start & ~PAGE_MASK))
+	if (unlikely(!mm_pte_aligned(current->mm, start)))
 		return -EINVAL;
 
 	/* ..and we need to be passed a valid user-space range */
@@ -308,8 +308,8 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 		return -ENOMEM;
 
 	/* This also avoids any overflows on PAGE_ALIGN */
-	pages = len >> PAGE_SHIFT;
-	pages += (offset_in_page(len)) != 0;
+	pages = len >> mm_pte_shift(current->mm);
+	pages += (mm_offset_in_pte(current->mm, len)) != 0;
 
 	if (!access_ok(vec, pages))
 		return -EFAULT;
@@ -336,7 +336,7 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 		}
 		pages -= retval;
 		vec += retval;
-		start += retval << PAGE_SHIFT;
+		start += retval << mm_pte_shift(current->mm);
 		retval = 0;
 	}
 	free_page((unsigned long) tmp);
