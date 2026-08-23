@@ -559,7 +559,7 @@ static int aio_setup_ring(struct kioctx *ctx, unsigned int nr_events)
 	}
 
 	ctx->aio_ring_file = file;
-	nr_events = (PAGE_SIZE * nr_pages - sizeof(struct aio_ring))
+	nr_events = (mm_pte_size(mm) * nr_pages - sizeof(struct aio_ring))
 			/ sizeof(struct io_event);
 
 	ctx->ring_folios = ctx->internal_folios;
@@ -593,7 +593,7 @@ static int aio_setup_ring(struct kioctx *ctx, unsigned int nr_events)
 		return -ENOMEM;
 	}
 
-	ctx->mmap_size = nr_pages * PAGE_SIZE;
+	ctx->mmap_size = nr_pages * mm_pte_size(mm);
 	pr_debug("attempting mmap of %lu bytes\n", ctx->mmap_size);
 
 	if (mmap_write_lock_killable(mm)) {
