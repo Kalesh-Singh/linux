@@ -1552,7 +1552,7 @@ long do_shmat(int shmid, char __user *shmaddr, int shmflg,
 					goto out;
 			} else
 #ifndef __ARCH_FORCE_SHMLBA
-				if (addr & ~PAGE_MASK)
+				if (!mm_pte_aligned(current->mm, addr))
 #endif
 					goto out;
 		}
@@ -1775,7 +1775,7 @@ long ksys_shmdt(char __user *shmaddr)
 		 * otherwise it starts at this address with no hassles.
 		 */
 		if ((vma->vm_ops == &shm_vm_ops) &&
-			(vma->vm_start - addr)/PAGE_SIZE == vma->vm_pgoff) {
+			(vma->vm_start - addr) / mm_pte_size(mm) == vma->vm_pgoff) {
 
 			/*
 			 * Record the file of the shm segment being
