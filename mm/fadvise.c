@@ -118,8 +118,9 @@ int generic_fadvise(struct file *file, loff_t offset, loff_t len, int advice)
 		 * preserved on the expectation that it is better to preserve
 		 * needed memory than to discard unneeded memory.
 		 */
-		start_index = (offset+(PAGE_SIZE-1)) >> PAGE_SHIFT;
-		end_index = (endbyte >> PAGE_SHIFT);
+		start_index = (offset + (mm_pte_size(current->mm) - 1)) >>
+			mm_pte_shift(current->mm);
+		end_index = (endbyte >> mm_pte_shift(current->mm));
 		/*
 		 * The page at end_index will be inclusively discarded according
 		 * by invalidate_mapping_pages(), so subtracting 1 from
@@ -127,7 +128,7 @@ int generic_fadvise(struct file *file, loff_t offset, loff_t len, int advice)
 		 * is page aligned or is at the end of file, we should not skip
 		 * that page - discarding the last page is safe enough.
 		 */
-		if ((endbyte & ~PAGE_MASK) != ~PAGE_MASK &&
+		if ((endbyte & ~mm_pte_mask(current->mm)) != ~mm_pte_mask(current->mm) &&
 				endbyte != inode->i_size - 1) {
 			/* First page is tricky as 0 - 1 = -1, but pgoff_t
 			 * is unsigned, so the end_index >= start_index
