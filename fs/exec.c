@@ -491,9 +491,9 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
 			}
 			cond_resched();
 
-			offset = pos % PAGE_SIZE;
+			offset = pos % mm_pte_size(bprm->mm);
 			if (offset == 0)
-				offset = PAGE_SIZE;
+				offset = mm_pte_size(bprm->mm);
 
 			bytes_to_copy = offset;
 			if (bytes_to_copy > len)
@@ -504,7 +504,7 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
 			str -= bytes_to_copy;
 			len -= bytes_to_copy;
 
-			if (!kmapped_page || kpos != (pos & PAGE_MASK)) {
+			if (!kmapped_page || kpos != mm_pte_align_down(bprm->mm, pos)) {
 				struct page *page;
 
 				page = get_arg_page(bprm, pos, 1);
@@ -520,7 +520,7 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
 				}
 				kmapped_page = page;
 				kaddr = kmap_local_page(kmapped_page);
-				kpos = pos & PAGE_MASK;
+				kpos = mm_pte_align_down(bprm->mm, pos);
 				flush_arg_page(bprm, kpos, kmapped_page);
 			}
 			if (copy_from_user(kaddr+offset, str, bytes_to_copy)) {
@@ -559,8 +559,8 @@ int copy_string_kernel(const char *arg, struct linux_binprm *bprm)
 		return -E2BIG;
 
 	while (len > 0) {
-		unsigned int bytes_to_copy = min(len,
-				min_not_zero(offset_in_page(pos), PAGE_SIZE));
+		unsigned int bytes_to_copy = min_t(unsigned int, len,
+				min_not_zero(mm_offset_in_pte(bprm->mm, pos), mm_pte_size(bprm->mm)));
 		struct page *page;
 
 		pos -= bytes_to_copy;
@@ -570,8 +570,8 @@ int copy_string_kernel(const char *arg, struct linux_binprm *bprm)
 		page = get_arg_page(bprm, pos, 1);
 		if (!page)
 			return -E2BIG;
-		flush_arg_page(bprm, pos & PAGE_MASK, page);
-		memcpy_to_page(page, offset_in_page(pos), arg, bytes_to_copy);
+		flush_arg_page(bprm, mm_pte_align_down(bprm->mm, pos), page);
+		memcpy_to_page(page, mm_offset_in_pte(bprm->mm, pos), arg, bytes_to_copy);
 		put_arg_page(page);
 	}
 
@@ -624,20 +624,20 @@ int setup_arg_pages(struct linux_binprm *bprm,
 
 	/* Add space for stack randomization. */
 	if (current->flags & PF_RANDOMIZE)
-		stack_base += (STACK_RND_MASK << PAGE_SHIFT);
+		stack_base += (STACK_RND_MASK << mm_pte_shift(mm));
 
 	/* Make sure we didn't let the argument array grow too large. */
 	if (vma->vm_end - vma->vm_start > stack_base)
 		return -ENOMEM;
 
-	stack_base = PAGE_ALIGN(stack_top - stack_base);
+	stack_base = mm_pte_align(mm, stack_top - stack_base);
 
 	stack_shift = vma->vm_start - stack_base;
 	mm->arg_start = bprm->p - stack_shift;
 	bprm->p = vma->vm_end - stack_shift;
 #else
 	stack_top = arch_align_stack(stack_top);
-	stack_top = PAGE_ALIGN(stack_top);
+	stack_top = mm_pte_align(mm, stack_top);
 
 	if (unlikely(stack_top < mmap_min_addr) ||
 	    unlikely(vma->vm_end - vma->vm_start >= stack_top - mmap_min_addr))
@@ -705,7 +705,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	 * Align this down to a page boundary as expand_stack
 	 * will align it up.
 	 */
-	rlim_stack = bprm->rlim_stack.rlim_cur & PAGE_MASK;
+	rlim_stack = mm_pte_align_down(mm, bprm->rlim_stack.rlim_cur);
 
 	stack_expand = min(rlim_stack, stack_size + stack_expand);
 
@@ -1648,19 +1648,19 @@ int remove_arg_zero(struct linux_binprm *bprm)
 		return 0;
 
 	do {
-		offset = bprm->p & ~PAGE_MASK;
+		offset = mm_offset_in_pte(bprm->mm, bprm->p);
 		page = get_arg_page(bprm, bprm->p, 0);
 		if (!page)
 			return -EFAULT;
 		kaddr = kmap_local_page(page);
 
-		for (; offset < PAGE_SIZE && kaddr[offset];
+		for (; offset < mm_pte_size(bprm->mm) && kaddr[offset];
 				offset++, bprm->p++)
 			;
 
 		kunmap_local(kaddr);
 		put_arg_page(page);
-	} while (offset == PAGE_SIZE);
+	} while (offset == mm_pte_size(bprm->mm));
 
 	bprm->p++;
 	bprm->argc--;
