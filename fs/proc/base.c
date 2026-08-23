@@ -250,15 +250,15 @@ static ssize_t get_mm_proctitle(struct mm_struct *mm, char __user *buf,
 	char *page;
 	int ret, got;
 
-	if (pos >= PAGE_SIZE)
+	if (pos >= mm_pte_size(mm))
 		return 0;
 
-	page = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	page = kmalloc(mm_pte_size(mm), GFP_KERNEL);
 	if (!page)
 		return -ENOMEM;
 
 	ret = 0;
-	got = access_remote_vm(mm, arg_start, page, PAGE_SIZE, FOLL_ANON);
+	got = access_remote_vm(mm, arg_start, page, mm_pte_size(mm), FOLL_ANON);
 	if (got > 0) {
 		int len = strnlen(page, got);
 
@@ -339,14 +339,14 @@ static ssize_t get_mm_cmdline(struct mm_struct *mm, char __user *buf,
 	if (count > arg_end - pos)
 		count = arg_end - pos;
 
-	page = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	page = kmalloc(mm_pte_size(mm), GFP_KERNEL);
 	if (!page)
 		return -ENOMEM;
 
 	len = 0;
 	while (count) {
 		int got;
-		size_t size = min_t(size_t, PAGE_SIZE, count);
+		size_t size = min_t(size_t, mm_pte_size(mm), count);
 
 		got = access_remote_vm(mm, pos, page, size, FOLL_ANON);
 		if (got <= 0)
