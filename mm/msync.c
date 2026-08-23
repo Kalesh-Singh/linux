@@ -41,12 +41,12 @@ SYSCALL_DEFINE3(msync, unsigned long, start, size_t, len, int, flags)
 
 	if (flags & ~(MS_ASYNC | MS_INVALIDATE | MS_SYNC))
 		goto out;
-	if (offset_in_page(start))
+	if (!mm_pte_aligned(mm, start))
 		goto out;
 	if ((flags & MS_ASYNC) && (flags & MS_SYNC))
 		goto out;
 	error = -ENOMEM;
-	len = (len + ~PAGE_MASK) & PAGE_MASK;
+	len = mm_pte_align(mm, len);
 	end = start + len;
 	if (end < start)
 		goto out;
