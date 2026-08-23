@@ -1537,6 +1537,19 @@ static inline void arch_swap_restore(swp_entry_t entry, struct folio *folio)
 })
 #endif
 
+/**
+ * for_each_pte_range - iterate over a contiguous range of page table entries
+ * @pte:       pointer to the current pte_t entry
+ * @addr:      current virtual address variable
+ * @end:       end virtual address of the range
+ * @step:      number of PTEs to step in this iteration (default 1, scaled for batches)
+ * @pte_size:  stride size per page table entry (e.g. PAGE_SIZE)
+ */
+#ifndef for_each_pte_range
+#define for_each_pte_range(pte, addr, end, step, pte_size) \
+	for ((step) = 1; (addr) < (end); (pte) += (step), (addr) += (step) * (pte_size), (step) = 1)
+#endif
+
 /*
  * When walking page tables, we usually want to skip any p?d_none entries;
  * and any p?d_bad entries - reporting the error before resetting to none.
