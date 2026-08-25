@@ -16,6 +16,7 @@
 #include <linux/mm_types.h>
 #include <linux/pgtable.h>
 #include <linux/pkeys.h>
+#include <linux/p3s.h>
 
 #include <asm/cacheflush.h>
 #include <asm/cpufeature.h>
@@ -58,7 +59,29 @@ void cpu_do_switch_mm(phys_addr_t pgd_phys, struct mm_struct *mm);
 static inline void cpu_switch_mm(pgd_t *pgd, struct mm_struct *mm)
 {
 	BUG_ON(pgd == swapper_pg_dir);
-	cpu_do_switch_mm(virt_to_phys(pgd),mm);
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm && mm != &init_mm) {
+		unsigned long tcr = read_sysreg(tcr_el1);
+		unsigned long tg0 = (tcr & TCR_TG0_MASK);
+
+		if (mm_is_4kb(mm)) {
+			if (tg0 != TCR_TG0_4K) {
+				tcr &= ~(TCR_TG0_MASK | TCR_EL1_T0SZ_MASK);
+				tcr |= TCR_TG0_4K | TCR_T0SZ(39);
+				write_sysreg(tcr, tcr_el1);
+				isb();
+			}
+		} else {
+			if (tg0 != TCR_TG0_16K) {
+				tcr &= ~(TCR_TG0_MASK | TCR_EL1_T0SZ_MASK);
+				tcr |= TCR_TG0_16K | TCR_T0SZ(vabits_actual);
+				write_sysreg(tcr, tcr_el1);
+				isb();
+			}
+		}
+	}
+#endif
+	cpu_do_switch_mm(virt_to_phys(pgd), mm);
 }
 
 /*
