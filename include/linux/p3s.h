@@ -134,4 +134,21 @@ static inline pgoff_t vma_pgoff_offset(const struct vm_area_struct *vma,
 	return vma->vm_pgoff + (temp >> P3S_SLICE_SHIFT);
 }
 
+#define clear_pte_slice_offset(pte)					\
+	__pte(pte_val(pte) & ~((PAGE_SIZE - 1) & ~(PAGE_SIZE_4KB - 1)))
+
+static inline unsigned int vma_address_to_slice(const struct vm_area_struct *vma,
+						unsigned long address)
+{
+	if (!mm_is_4kb(vma->vm_mm))
+		return 0;
+
+	/* Anonymous VMAs have no subpage slices */
+	if (!vma->vm_ops)
+		return 0;
+
+	return (((address - vma->vm_start) >> PAGE_SHIFT_4KB) +
+		vma_slice_off(vma)) & P3S_SLICE_MASK;
+}
+
 #endif /* _LINUX_P3S_H */
