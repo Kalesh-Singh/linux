@@ -14,4 +14,6 @@
  */
 #define set_personality(pers)	(current->personality = (pers))
 
+#define personality_4kb_pages(pers)	(!!((pers) & ADDR_4KB_COMPAT_PAGE_SIZE))
+
 #endif /* _LINUX_PERSONALITY_H */
