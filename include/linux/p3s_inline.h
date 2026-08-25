@@ -48,11 +48,6 @@ static __always_inline bool mm_pte_aligned(const struct mm_struct *mm, unsigned 
 }
 #define mm_pte_aligned mm_pte_aligned
 
-static __always_inline bool p3s_mm_is_4kb(const struct mm_struct *mm)
-{
-	return mm_pte_shift(mm) == PAGE_SHIFT_4KB;
-}
-
 #endif /* CONFIG_ARM64_PER_PROCESS_PAGE_SIZE */
 
 #endif /* _LINUX_P3S_INLINE_H */
