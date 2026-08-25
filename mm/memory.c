@@ -1629,7 +1629,7 @@ zap_install_uffd_wp_if_needed(struct vm_area_struct *vma,
 		if (--nr == 0)
 			break;
 		pte++;
-		addr += PAGE_SIZE;
+		addr += mm_pte_size(vma->vm_mm);
 	}
 
 	return was_installed;
@@ -2467,7 +2467,7 @@ more:
 				remaining_pages_total -= pte_idx;
 				goto out;
 			}
-			addr += PAGE_SIZE;
+			addr += mm_pte_size(vma->vm_mm);
 			++curr_page_idx;
 		}
 		pte_unmap_unlock(start_pte, pte_lock);
@@ -2501,7 +2501,7 @@ int vm_insert_pages(struct vm_area_struct *vma, unsigned long addr,
 			struct page **pages, unsigned long *num)
 {
 	const unsigned long nr_pages = *num;
-	const unsigned long end = addr + PAGE_SIZE * nr_pages;
+	const unsigned long end = addr + mm_pte_size(vma->vm_mm) * nr_pages;
 
 	if (!range_in_vma(vma, addr, end))
 		return -EFAULT;
@@ -2528,7 +2528,7 @@ int map_kernel_pages_prepare(struct vm_area_desc *desc)
 	}
 
 	nr_pages = action->map_kernel.nr_pages;
-	end = addr + PAGE_SIZE * nr_pages;
+	end = addr + mm_pte_size(desc->mm) * nr_pages;
 	if (!range_in_vma_desc(desc, addr, end))
 		return -EFAULT;
 
