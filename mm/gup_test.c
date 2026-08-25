@@ -109,6 +109,7 @@ static int __gup_test_ioctl(unsigned int cmd,
 	int ret = 0;
 	bool needs_mmap_lock =
 		cmd != GUP_FAST_BENCHMARK && cmd != PIN_FAST_BENCHMARK;
+	unsigned long pgsize = mm_pte_size(current->mm);
 
 	if (gup->addr > ULONG_MAX || gup->size > ULONG_MAX)
 		return -EINVAL;
@@ -116,7 +117,7 @@ static int __gup_test_ioctl(unsigned int cmd,
 			       (unsigned long)gup->size, &end))
 		return -EINVAL;
 
-	nr_pages = gup->size / PAGE_SIZE;
+	nr_pages = gup->size / pgsize;
 	pages = kvcalloc(nr_pages, sizeof(void *), GFP_KERNEL);
 	if (!pages)
 		return -ENOMEM;
@@ -133,10 +134,10 @@ static int __gup_test_ioctl(unsigned int cmd,
 		if (nr != gup->nr_pages_per_call)
 			break;
 
-		next = addr + nr * PAGE_SIZE;
+		next = addr + nr * pgsize;
 		if (next > end) {
 			next = end;
-			nr = (next - addr) / PAGE_SIZE;
+			nr = (next - addr) / pgsize;
 		}
 
 		switch (cmd) {
@@ -242,11 +243,14 @@ static inline int pin_longterm_test_start(unsigned long arg)
 	if (args.flags &
 	    ~(PIN_LONGTERM_TEST_FLAG_USE_WRITE|PIN_LONGTERM_TEST_FLAG_USE_FAST))
 		return -EINVAL;
-	if (!IS_ALIGNED(args.addr | args.size, PAGE_SIZE))
+
+	unsigned long pgsize = mm_pte_size(current->mm);
+
+	if (!IS_ALIGNED(args.addr | args.size, pgsize))
 		return -EINVAL;
 	if (args.size > LONG_MAX)
 		return -EINVAL;
-	nr_pages = args.size / PAGE_SIZE;
+	nr_pages = args.size / pgsize;
 	if (!nr_pages)
 		return -EINVAL;
 
@@ -268,7 +272,7 @@ static inline int pin_longterm_test_start(unsigned long arg)
 
 	while (nr_pages - pin_longterm_test_nr_pages) {
 		remaining_pages = nr_pages - pin_longterm_test_nr_pages;
-		addr = args.addr + pin_longterm_test_nr_pages * PAGE_SIZE;
+		addr = args.addr + pin_longterm_test_nr_pages * pgsize;
 
 		if (fast)
 			cur_pages = pin_user_pages_fast(addr, remaining_pages,
@@ -294,6 +298,7 @@ static inline int pin_longterm_test_read(unsigned long arg)
 {
 	__u64 user_addr;
 	unsigned long i;
+	unsigned long pgsize = mm_pte_size(current->mm);
 
 	if (!pin_longterm_test_pages)
 		return -EINVAL;
@@ -306,11 +311,11 @@ static inline int pin_longterm_test_read(unsigned long arg)
 		unsigned long ret;
 
 		ret = copy_to_user((void __user *)(unsigned long)user_addr, addr,
-				   PAGE_SIZE);
+				   pgsize);
 		kunmap_local(addr);
 		if (ret)
 			return -EFAULT;
-		user_addr += PAGE_SIZE;
+		user_addr += pgsize;
 	}
 	return 0;
 }
