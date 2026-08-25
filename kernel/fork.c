@@ -1113,6 +1113,9 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p)
 	futex_mm_init(mm);
 
 	mm_flags_clear_all(mm);
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	mm->pte_shift = current->mm ? current->mm->pte_shift : PAGE_SHIFT;
+#endif
 	if (current->mm) {
 		unsigned long flags = __mm_flags_get_word(current->mm);
 

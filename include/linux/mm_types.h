@@ -1326,6 +1326,9 @@ struct mm_struct {
 
 		/* store ref to file /proc/<pid>/exe symlink points to */
 		struct file __rcu *exe_file;
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+		u8 pte_shift;
+#endif
 #ifdef CONFIG_MMU_NOTIFIER
 		struct mmu_notifier_subscriptions *notifier_subscriptions;
 #endif
