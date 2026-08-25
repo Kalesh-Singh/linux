@@ -1634,10 +1634,10 @@ int do_vmi_munmap(struct vma_iterator *vmi, struct mm_struct *mm,
 	unsigned long end;
 	struct vm_area_struct *vma;
 
-	if ((offset_in_page(start)) || start > TASK_SIZE || len > TASK_SIZE-start)
+	if ((mm_offset_in_pte(mm, start)) || start > TASK_SIZE || len > TASK_SIZE-start)
 		return -EINVAL;
 
-	end = start + PAGE_ALIGN(len);
+	end = start + mm_pte_align(mm, len);
 	if (end == start)
 		return -EINVAL;
 
