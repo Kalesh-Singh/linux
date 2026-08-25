@@ -1778,6 +1778,12 @@ static inline void set_pte(pte_t *ptep, pte_t pte)
 static __always_inline void set_ptes(struct mm_struct *mm, unsigned long addr,
 				pte_t *ptep, pte_t pte, unsigned int nr)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(mm)) {
+		__set_ptes(mm, addr, ptep, pte, nr);
+		return;
+	}
+#endif
 	pte = pte_mknoncont(pte);
 
 	if (likely(nr == 1)) {
@@ -1800,6 +1806,12 @@ static inline void pte_clear(struct mm_struct *mm,
 static inline void clear_full_ptes(struct mm_struct *mm, unsigned long addr,
 				pte_t *ptep, unsigned int nr, int full)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(mm)) {
+		__clear_full_ptes(mm, addr, ptep, nr, full);
+		return;
+	}
+#endif
 	if (likely(nr == 1)) {
 		contpte_try_unfold(mm, addr, ptep, __ptep_get(ptep));
 		__clear_full_ptes(mm, addr, ptep, nr, full);
@@ -1813,6 +1825,10 @@ static inline pte_t get_and_clear_full_ptes(struct mm_struct *mm,
 				unsigned long addr, pte_t *ptep,
 				unsigned int nr, int full)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(mm))
+		return __get_and_clear_full_ptes(mm, addr, ptep, nr, full);
+#endif
 	pte_t pte;
 
 	if (likely(nr == 1)) {
@@ -1865,6 +1881,18 @@ static inline void flush_tlb_before_set(unsigned long addr)
 static inline bool test_and_clear_young_ptes(struct vm_area_struct *vma,
 		unsigned long addr, pte_t *ptep, unsigned int nr)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(vma->vm_mm)) {
+		bool young = false;
+		unsigned long stride = mm_pte_size(vma->vm_mm);
+
+		for (unsigned int i = 0; i < nr; i++, addr += stride, ptep++) {
+			if (__ptep_test_and_clear_young(vma, addr, ptep))
+				young = true;
+		}
+		return young;
+	}
+#endif
 	if (likely(nr == 1 && !pte_cont(__ptep_get(ptep))))
 		return __ptep_test_and_clear_young(vma, addr, ptep);
 
@@ -1894,6 +1922,18 @@ static inline bool ptep_clear_flush_young(struct vm_area_struct *vma,
 static inline bool clear_flush_young_ptes(struct vm_area_struct *vma,
 		unsigned long addr, pte_t *ptep, unsigned int nr)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(vma->vm_mm)) {
+		bool young = false;
+		unsigned long stride = mm_pte_size(vma->vm_mm);
+
+		for (unsigned int i = 0; i < nr; i++, addr += stride, ptep++) {
+			if (__ptep_clear_flush_young(vma, addr, ptep))
+				young = true;
+		}
+		return young;
+	}
+#endif
 	if (likely(nr == 1 && !pte_cont(__ptep_get(ptep))))
 		return __ptep_clear_flush_young(vma, addr, ptep);
 
@@ -1904,6 +1944,12 @@ static inline bool clear_flush_young_ptes(struct vm_area_struct *vma,
 static __always_inline void wrprotect_ptes(struct mm_struct *mm,
 				unsigned long addr, pte_t *ptep, unsigned int nr)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(mm)) {
+		__wrprotect_ptes(mm, addr, ptep, nr);
+		return;
+	}
+#endif
 	if (likely(nr == 1)) {
 		/*
 		 * Optimization: wrprotect_ptes() can only be called for present
@@ -1936,6 +1982,10 @@ static inline int ptep_set_access_flags(struct vm_area_struct *vma,
 				unsigned long addr, pte_t *ptep,
 				pte_t entry, int dirty)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(vma->vm_mm))
+		return __ptep_set_access_flags(vma, addr, ptep, entry, dirty);
+#endif
 	pte_t orig_pte = __ptep_get(ptep);
 
 	entry = pte_mknoncont(entry);
@@ -1951,6 +2001,12 @@ static inline void clear_young_dirty_ptes(struct vm_area_struct *vma,
 					  unsigned long addr, pte_t *ptep,
 					  unsigned int nr, cydp_t flags)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(vma->vm_mm)) {
+		__clear_young_dirty_ptes(vma, addr, ptep, nr, flags);
+		return;
+	}
+#endif
 	if (likely(nr == 1 && !pte_cont(__ptep_get(ptep))))
 		__clear_young_dirty_ptes(vma, addr, ptep, nr, flags);
 	else
