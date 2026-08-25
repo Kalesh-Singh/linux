@@ -242,19 +242,15 @@ int __ptep_set_access_flags_anysz(struct vm_area_struct *vma,
 	 * flush_tlb_fix_spurious_fault().
 	 */
 	if (dirty) {
-		switch (pgsize) {
-		case PAGE_SIZE:
+		if (pgsize == PAGE_SIZE || pgsize == PAGE_SIZE_4KB)
 			level = 3;
-			break;
-		case PMD_SIZE:
+		else if (pgsize == PMD_SIZE || pgsize == PMD_SIZE_4KB)
 			level = 2;
-			break;
 #ifndef __PAGETABLE_PMD_FOLDED
-		case PUD_SIZE:
+		else if (pgsize == PUD_SIZE)
 			level = 1;
-			break;
 #endif
-		default:
+		else {
 			level = TLBI_TTL_UNKNOWN;
 			WARN_ON(1);
 		}
