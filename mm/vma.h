@@ -196,6 +196,82 @@ struct vma_merge_struct {
 
 };
 
+static inline unsigned long vmg_nr_slices(const struct vma_merge_struct *vmg)
+{
+	return (vmg->end - vmg->start) >> mm_pte_shift(vmg->mm);
+}
+
+static inline pgoff_t vmg_native_pages(const struct vma_merge_struct *vmg)
+{
+	bool is_compat = mm_is_4kb(vmg->mm);
+	bool is_anon = !vmg->file;
+	unsigned long nr_slices = vmg_nr_slices(vmg);
+
+	if (!is_compat || is_anon)
+		return nr_slices;
+
+	return (vmg->slice_off + nr_slices) >> P3S_SLICE_SHIFT;
+}
+
+static inline bool vmg_can_merge_offsets(const struct vma_merge_struct *vmg,
+					 bool merge_next)
+{
+	bool is_compat = mm_is_4kb(vmg->mm);
+	bool is_anon = !vmg->file;
+
+	if (merge_next) {
+		pgoff_t pglen = vmg_native_pages(vmg);
+
+		/* Verify native page cache index alignment */
+		if (vmg->next->vm_pgoff != vmg->pgoff + pglen)
+			return false;
+
+		/* Non-compat or anonymous mappings don't track subpage slices */
+		if (!is_compat || is_anon)
+			return true;
+
+		/* Verify compat subpage slice alignment */
+		return vma_slice_off(vmg->next) ==
+		       ((vmg->slice_off + vmg_nr_slices(vmg)) & P3S_SLICE_MASK);
+	} else {
+		pgoff_t pglen = vma_native_pages(vmg->prev);
+
+		/* Verify native page cache index alignment */
+		if (vmg->prev->vm_pgoff + pglen != vmg->pgoff)
+			return false;
+
+		/* Non-compat or anonymous mappings don't track subpage slices */
+		if (!is_compat || is_anon)
+			return true;
+
+		/* Verify compat subpage slice alignment */
+		return vmg->slice_off ==
+		       ((vma_slice_off(vmg->prev) + vma_nr_slices(vmg->prev)) & P3S_SLICE_MASK);
+	}
+}
+
+static inline pgoff_t mmap_pgoff_offset(const struct mmap_state *map)
+{
+	if (!mm_is_4kb(map->mm))
+		return map->pgoff;
+
+	if (map->file || vma_flags_test(&map->vma_flags, VMA_SHARED_BIT))
+		return map->pgoff >> P3S_SLICE_SHIFT;
+
+	return map->pgoff;
+}
+
+static inline unsigned int mmap_slice_offset(const struct mmap_state *map)
+{
+	if (!mm_is_4kb(map->mm))
+		return 0;
+
+	if (map->file || vma_flags_test(&map->vma_flags, VMA_SHARED_BIT))
+		return map->pgoff & P3S_SLICE_MASK;
+
+	return 0;
+}
+
 struct unmap_desc {
 	struct  ma_state *mas;        /* the maple state point to the first vma */
 	struct vm_area_struct *first; /* The first vma */
@@ -265,13 +341,6 @@ static inline void unmap_pgtable_init(struct unmap_desc *unmap,
 static inline bool vmg_nomem(struct vma_merge_struct *vmg)
 {
 	return vmg->state == VMA_MERGE_ERROR_NOMEM;
-}
-
-/* Assumes addr >= vma->vm_start. */
-static inline pgoff_t vma_pgoff_offset(struct vm_area_struct *vma,
-				       unsigned long addr)
-{
-	return vma->vm_pgoff + PHYS_PFN(addr - vma->vm_start);
 }
 
 #define VMG_STATE(name, mm_, vmi_, start_, end_, vma_flags_, pgoff_)	\
@@ -486,7 +555,7 @@ void unlink_file_vma_batch_add(struct unlink_vma_file_batch *vb,
 
 struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 	unsigned long addr, unsigned long len, pgoff_t pgoff,
-	bool *need_rmap_locks);
+	unsigned int slice_off, bool *need_rmap_locks);
 
 struct anon_vma *find_mergeable_anon_vma(struct vm_area_struct *vma);
 

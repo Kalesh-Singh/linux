@@ -1066,7 +1066,7 @@ static inline pgoff_t folio_pgoff(const struct folio *folio)
 static inline pgoff_t linear_page_index(const struct vm_area_struct *vma,
 					const unsigned long address)
 {
-	return vma_linear_page_index(vma, address);
+	return vma_pgoff_offset(vma, address);
 }
 
 struct wait_page_key {

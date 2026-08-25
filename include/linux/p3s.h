@@ -15,7 +15,53 @@
 #define P3S_SLICES_PER_PAGE	(1UL << P3S_SLICE_SHIFT)
 #define P3S_SLICE_MASK		(P3S_SLICES_PER_PAGE - 1)
 
-static inline bool p3s_mm_is_4kb(const struct mm_struct *mm)
+static __always_inline unsigned int mm_pte_shift(const struct mm_struct *mm)
+{
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	return (mm && mm->pte_shift) ? mm->pte_shift : PAGE_SHIFT;
+#else
+	return PAGE_SHIFT;
+#endif
+}
+#define mm_pte_shift mm_pte_shift
+
+static __always_inline unsigned long mm_pte_size(const struct mm_struct *mm)
+{
+	return 1UL << mm_pte_shift(mm);
+}
+#define mm_pte_size mm_pte_size
+
+static __always_inline unsigned long mm_pte_mask(const struct mm_struct *mm)
+{
+	return ~(mm_pte_size(mm) - 1);
+}
+#define mm_pte_mask mm_pte_mask
+
+static __always_inline unsigned long mm_offset_in_pte(const struct mm_struct *mm, unsigned long addr)
+{
+	return addr & (mm_pte_size(mm) - 1);
+}
+#define mm_offset_in_pte mm_offset_in_pte
+
+static __always_inline unsigned long mm_pte_align(const struct mm_struct *mm, unsigned long val)
+{
+	return ALIGN(val, mm_pte_size(mm));
+}
+#define mm_pte_align mm_pte_align
+
+static __always_inline unsigned long mm_pte_align_down(const struct mm_struct *mm, unsigned long val)
+{
+	return ALIGN_DOWN(val, mm_pte_size(mm));
+}
+#define mm_pte_align_down mm_pte_align_down
+
+static __always_inline bool mm_pte_aligned(const struct mm_struct *mm, unsigned long val)
+{
+	return !(val & (mm_pte_size(mm) - 1));
+}
+#define mm_pte_aligned mm_pte_aligned
+
+static inline bool mm_is_4kb(const struct mm_struct *mm)
 {
 #ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
 	return mm ? (mm->pte_shift == PAGE_SHIFT_4KB) : false;
@@ -41,26 +87,51 @@ static inline unsigned int vma_slice_off(const struct vm_area_struct *vma)
 }
 #endif
 
-static inline pgoff_t vma_linear_page_index(const struct vm_area_struct *vma,
-					    unsigned long address)
+static inline unsigned long vma_nr_slices(const struct vm_area_struct *vma)
 {
-#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
-	if (p3s_mm_is_4kb(vma->vm_mm)) {
-		/* For anonymous VMAs, there is no page cache layout to conform to. */
-		if (!vma->vm_ops)
-			return vma->vm_pgoff + ((address - vma->vm_start) >> PAGE_SHIFT_4KB);
+	return (vma->vm_end - vma->vm_start) >> mm_pte_shift(vma->vm_mm);
+}
 
-		/*
-		 * For file-backed VMAs in compat processes, the VMA offset starts at a
-		 * host page boundary (vm_pgoff) but may be offset internally by a
-		 * number of subpage slices (vm_slice_off).
-		 */
-		pgoff_t temp = ((address - vma->vm_start) >> PAGE_SHIFT_4KB) + vma_slice_off(vma);
+static inline pgoff_t vma_native_pages(const struct vm_area_struct *vma)
+{
+	bool is_compat = mm_is_4kb(vma->vm_mm);
+	bool is_anon = !vma->vm_ops;
+	unsigned long nr_slices = vma_nr_slices(vma);
 
-		return vma->vm_pgoff + (temp >> P3S_SLICE_SHIFT);
-	}
-#endif
-	return vma->vm_pgoff + ((address - vma->vm_start) >> PAGE_SHIFT);
+	if (!is_compat || is_anon)
+		return nr_slices;
+
+	return (vma_slice_off(vma) + nr_slices) >> P3S_SLICE_SHIFT;
+}
+
+static inline unsigned int vma_slice_offset(const struct vm_area_struct *vma,
+					    unsigned long addr)
+{
+	unsigned long total_slices;
+
+	if (!mm_is_4kb(vma->vm_mm))
+		return 0;
+
+	if (!vma->vm_ops)
+		return 0;
+
+	total_slices = ((addr - vma->vm_start) >> PAGE_SHIFT_4KB) +
+				vma_slice_off(vma);
+
+	return total_slices & P3S_SLICE_MASK;
+}
+
+static inline pgoff_t vma_pgoff_offset(const struct vm_area_struct *vma,
+				       unsigned long addr)
+{
+	if (!mm_is_4kb(vma->vm_mm))
+		return vma->vm_pgoff + ((addr - vma->vm_start) >> PAGE_SHIFT);
+
+	if (!vma->vm_ops)
+		return vma->vm_pgoff + ((addr - vma->vm_start) >> PAGE_SHIFT_4KB);
+
+	pgoff_t temp = ((addr - vma->vm_start) >> PAGE_SHIFT_4KB) + vma_slice_off(vma);
+	return vma->vm_pgoff + (temp >> P3S_SLICE_SHIFT);
 }
 
 #endif /* _LINUX_P3S_H */
