@@ -22,43 +22,59 @@
 #error CONFIG_PGTABLE_LEVELS is not consistent with __PAGETABLE_{P4D,PUD,PMD}_FOLDED
 #endif
 
+#include <linux/p3s_inline.h>
+
 /*
  * Dynamic mm_struct geometry accessors
  */
+#ifndef mm_pte_shift
 static __always_inline unsigned int mm_pte_shift(const struct mm_struct *mm)
 {
 	return PAGE_SHIFT;
 }
+#endif
 
+#ifndef mm_pte_size
 static __always_inline unsigned long mm_pte_size(const struct mm_struct *mm)
 {
 	return 1UL << mm_pte_shift(mm);
 }
+#endif
 
+#ifndef mm_pte_mask
 static __always_inline unsigned long mm_pte_mask(const struct mm_struct *mm)
 {
 	return ~(mm_pte_size(mm) - 1);
 }
+#endif
 
+#ifndef mm_offset_in_pte
 static __always_inline unsigned long mm_offset_in_pte(const struct mm_struct *mm, unsigned long addr)
 {
 	return addr & (mm_pte_size(mm) - 1);
 }
+#endif
 
+#ifndef mm_pte_align
 static __always_inline unsigned long mm_pte_align(const struct mm_struct *mm, unsigned long val)
 {
 	return ALIGN(val, mm_pte_size(mm));
 }
+#endif
 
+#ifndef mm_pte_align_down
 static __always_inline unsigned long mm_pte_align_down(const struct mm_struct *mm, unsigned long val)
 {
 	return ALIGN_DOWN(val, mm_pte_size(mm));
 }
+#endif
 
+#ifndef mm_pte_aligned
 static __always_inline bool mm_pte_aligned(const struct mm_struct *mm, unsigned long val)
 {
 	return !(val & (mm_pte_size(mm) - 1));
 }
+#endif
 
 /*
  * This defines the generic helper for accessing PMD page
