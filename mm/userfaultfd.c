@@ -3545,7 +3545,7 @@ static __always_inline int validate_unaligned_range(
 {
 	__u64 task_size = mm->task_size;
 
-	if (len & ~PAGE_MASK)
+	if (!mm_pte_aligned(mm, len))
 		return -EINVAL;
 	if (!len)
 		return -EINVAL;
