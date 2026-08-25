@@ -23,6 +23,44 @@
 #endif
 
 /*
+ * Dynamic mm_struct geometry accessors
+ */
+static __always_inline unsigned int mm_pte_shift(const struct mm_struct *mm)
+{
+	return PAGE_SHIFT;
+}
+
+static __always_inline unsigned long mm_pte_size(const struct mm_struct *mm)
+{
+	return 1UL << mm_pte_shift(mm);
+}
+
+static __always_inline unsigned long mm_pte_mask(const struct mm_struct *mm)
+{
+	return ~(mm_pte_size(mm) - 1);
+}
+
+static __always_inline unsigned long mm_offset_in_pte(const struct mm_struct *mm, unsigned long addr)
+{
+	return addr & (mm_pte_size(mm) - 1);
+}
+
+static __always_inline unsigned long mm_pte_align(const struct mm_struct *mm, unsigned long val)
+{
+	return ALIGN(val, mm_pte_size(mm));
+}
+
+static __always_inline unsigned long mm_pte_align_down(const struct mm_struct *mm, unsigned long val)
+{
+	return ALIGN_DOWN(val, mm_pte_size(mm));
+}
+
+static __always_inline bool mm_pte_aligned(const struct mm_struct *mm, unsigned long val)
+{
+	return !(val & (mm_pte_size(mm) - 1));
+}
+
+/*
  * This defines the generic helper for accessing PMD page
  * table page. Although platforms can still override this
  * via their respective <asm/pgtable.h>.
@@ -692,7 +730,7 @@ static inline void clear_young_dirty_ptes(struct vm_area_struct *vma,
 		if (--nr == 0)
 			break;
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += mm_pte_size(vma->vm_mm);
 	}
 }
 #endif
@@ -879,7 +917,7 @@ static inline pte_t get_and_clear_full_ptes(struct mm_struct *mm,
 	pte = ptep_get_and_clear_full(mm, addr, ptep, full);
 	while (--nr) {
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += mm_pte_size(mm);
 		tmp_pte = ptep_get_and_clear_full(mm, addr, ptep, full);
 		if (pte_dirty(tmp_pte))
 			pte = pte_mkdirty(pte);
@@ -940,7 +978,7 @@ static inline void clear_full_ptes(struct mm_struct *mm, unsigned long addr,
 		if (--nr == 0)
 			break;
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += mm_pte_size(mm);
 	}
 }
 #endif
@@ -1027,7 +1065,7 @@ static inline void clear_not_present_full_ptes(struct mm_struct *mm,
 		if (--nr == 0)
 			break;
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += mm_pte_size(mm);
 	}
 }
 #endif
@@ -1139,7 +1177,7 @@ static inline void wrprotect_ptes(struct mm_struct *mm, unsigned long addr,
 		if (--nr == 0)
 			break;
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += mm_pte_size(mm);
 	}
 }
 #endif
@@ -1172,7 +1210,7 @@ static inline bool clear_flush_young_ptes(struct vm_area_struct *vma,
 		if (--nr == 0)
 			break;
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += mm_pte_size(vma->vm_mm);
 	}
 
 	return young;
@@ -1706,7 +1744,7 @@ static inline pte_t modify_prot_start_ptes(struct vm_area_struct *vma,
 	pte = ptep_modify_prot_start(vma, addr, ptep);
 	while (--nr) {
 		ptep++;
-		addr += PAGE_SIZE;
+		addr += mm_pte_size(vma->vm_mm);
 		tmp_pte = ptep_modify_prot_start(vma, addr, ptep);
 		if (pte_dirty(tmp_pte))
 			pte = pte_mkdirty(pte);
@@ -1743,7 +1781,7 @@ static inline void modify_prot_commit_ptes(struct vm_area_struct *vma, unsigned 
 {
 	int i;
 
-	for (i = 0; i < nr; ++i, ++ptep, addr += PAGE_SIZE) {
+	for (i = 0; i < nr; ++i, ++ptep, addr += mm_pte_size(vma->vm_mm)) {
 		ptep_modify_prot_commit(vma, addr, ptep, old_pte, pte);
 
 		/* Advance PFN only, set same prot */
