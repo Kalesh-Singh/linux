@@ -3885,6 +3885,8 @@ vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 			     pgoff_t start_pgoff, pgoff_t end_pgoff)
 {
 	struct vm_area_struct *vma = vmf->vma;
+	if (mm_is_4kb(vma->vm_mm))
+		return 0;
 	struct file *file = vma->vm_file;
 	struct address_space *mapping = file->f_mapping;
 	pgoff_t file_end, last_pgoff = start_pgoff;

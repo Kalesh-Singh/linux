@@ -5688,6 +5688,8 @@ fallback:
 	/* Using per-page fault to maintain the uffd semantics */
 	if (unlikely(userfaultfd_armed(vma)) || unlikely(needs_fallback)) {
 		nr_pages = 1;
+	} else if (mm_is_4kb(vma->vm_mm)) {
+		nr_pages = 1;
 	} else if (nr_pages > 1) {
 		pgoff_t idx = folio_page_idx(folio, page);
 		/* The page offset of vmf->address within the VMA. */
@@ -5833,6 +5835,9 @@ static vm_fault_t do_fault_around(struct vm_fault *vmf)
 /* Return true if we should do read fault-around, false otherwise */
 static inline bool should_fault_around(struct vm_fault *vmf)
 {
+	if (mm_is_4kb(vmf->vma->vm_mm))
+		return false;
+
 	/* No ->map_pages?  No way to fault around... */
 	if (!vmf->vma->vm_ops->map_pages)
 		return false;
