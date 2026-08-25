@@ -4293,11 +4293,19 @@ static inline unsigned long vm_end_gap(const struct vm_area_struct *vma)
 
 static inline unsigned long vma_pages(const struct vm_area_struct *vma)
 {
-	return (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
+	return (vma->vm_end - vma->vm_start) >> mm_pte_shift(vma->vm_mm);
 }
 
 static inline unsigned long vma_last_pgoff(struct vm_area_struct *vma)
 {
+	/*
+	 * For file-backed VMAs, vm_pgoff is always expressed in native PAGE_SIZE
+	 * units (matching the page cache indexing). For anonymous VMAs, it is
+	 * scaled to the process's page size.
+	 */
+	if (!vma_is_anonymous(vma))
+		return vma->vm_pgoff + DIV_ROUND_UP(vma->vm_end - vma->vm_start, PAGE_SIZE) - 1;
+
 	return vma->vm_pgoff + vma_pages(vma) - 1;
 }
 
