@@ -370,6 +370,7 @@ static int mfill_atomic_install_pte(pmd_t *dst_pmd,
 	pte_t dst_ptep;
 
 	_dst_pte = mk_pte(page, dst_vma->vm_page_prot);
+	_dst_pte = p3s_folio_mk_pte_slice(dst_vma, folio, _dst_pte, dst_addr);
 	_dst_pte = pte_mkdirty(_dst_pte);
 	if (page_in_cache && !vm_shared)
 		writable = false;
@@ -427,38 +428,49 @@ out:
 	return ret;
 }
 
-static int mfill_copy_folio_locked(struct folio *folio, unsigned long src_addr)
+static int copy_user_to_folio(struct folio *folio, unsigned long dst_addr,
+			      unsigned long src_addr, struct mm_struct *mm,
+			      unsigned long vm_start, unsigned int vm_slice_off,
+			      bool is_anon, bool avoid_pagefault)
 {
+	unsigned int slice_idx = 0;
+	unsigned long offset;
 	void *kaddr;
 	int ret;
 
-	kaddr = kmap_local_folio(folio, 0);
-	/*
-	 * The read mmap_lock is held here.  Despite the
-	 * mmap_lock being read recursive a deadlock is still
-	 * possible if a writer has taken a lock.  For example:
-	 *
-	 * process A thread 1 takes read lock on own mmap_lock
-	 * process A thread 2 calls mmap, blocks taking write lock
-	 * process B thread 1 takes page fault, read lock on own mmap lock
-	 * process B thread 2 calls mmap, blocks taking write lock
-	 * process A thread 1 blocks taking read lock on process B
-	 * process B thread 1 blocks taking read lock on process A
-	 *
-	 * Disable page faults to prevent potential deadlock
-	 * and retry the copy outside the mmap_lock.
-	 */
-	pagefault_disable();
-	ret = copy_from_user(kaddr, (const void __user *) src_addr,
-			     PAGE_SIZE);
-	pagefault_enable();
-	kunmap_local(kaddr);
+	if (!is_anon)
+		slice_idx = address_to_slice(mm, dst_addr, vm_start, vm_slice_off);
 
+	offset = slice_idx * mm_pte_size(mm);
+
+	kaddr = kmap_local_folio(folio, 0);
+	memset(kaddr, 0, PAGE_SIZE);
+
+	if (avoid_pagefault)
+		pagefault_disable();
+
+	ret = copy_from_user(kaddr + offset, (const void __user *) src_addr, mm_pte_size(mm));
+
+	if (avoid_pagefault)
+		pagefault_enable();
+
+	kunmap_local(kaddr);
+	return ret ? -EFAULT : 0;
+}
+
+static int mfill_copy_folio_locked(struct folio *folio, unsigned long dst_addr,
+				   unsigned long src_addr, struct vm_area_struct *vma)
+{
+	int ret;
+
+	ret = copy_user_to_folio(folio, dst_addr, src_addr, vma->vm_mm,
+				 vma->vm_start, vma_slice_off(vma),
+				 vma_is_anonymous(vma), true);
 	if (ret)
-		return -EFAULT;
+		return ret;
 
 	flush_dcache_folio(folio);
-	return ret;
+	return 0;
 }
 
 #define MFILL_RETRY_STATE_VMA_FLAGS \
@@ -474,6 +486,8 @@ struct mfill_retry_state {
 	struct file *file;
 	vma_flags_t flags;
 	pgoff_t pgoff;
+	unsigned long vm_start;
+	unsigned int vm_slice_off;
 };
 
 static void mfill_retry_state_save(struct mfill_retry_state *s,
@@ -482,6 +496,8 @@ static void mfill_retry_state_save(struct mfill_retry_state *s,
 	s->flags = vma_flags_and_mask(&vma->flags, MFILL_RETRY_STATE_VMA_FLAGS);
 	s->ops = vma_uffd_ops(vma);
 	s->pgoff = vma->vm_pgoff;
+	s->vm_start = vma->vm_start;
+	s->vm_slice_off = vma_slice_off(vma);
 
 	if (vma->vm_file)
 		s->file = get_file(vma->vm_file);
@@ -528,7 +544,6 @@ static int mfill_copy_folio_retry(struct mfill_state *mfill_state,
 	struct mfill_retry_state retry_state = { 0 };
 	struct mfill_retry_state *for_free __free(retry_put) = &retry_state;
 	unsigned long src_addr = mfill_state->src_addr;
-	void *kaddr;
 	int err;
 
 	mfill_retry_state_save(&retry_state, mfill_state->vma);
@@ -536,11 +551,12 @@ static int mfill_copy_folio_retry(struct mfill_state *mfill_state,
 	/* retry copying with mm_lock dropped */
 	mfill_put_vma(mfill_state);
 
-	kaddr = kmap_local_folio(folio, 0);
-	err = copy_from_user(kaddr, (const void __user *) src_addr, PAGE_SIZE);
-	kunmap_local(kaddr);
+	err = copy_user_to_folio(folio, mfill_state->dst_addr, src_addr,
+				 mfill_state->ctx->mm, retry_state.vm_start,
+				 retry_state.vm_slice_off,
+				 retry_state.ops == &anon_uffd_ops, false);
 	if (unlikely(err))
-		return -EFAULT;
+		return err;
 
 	flush_dcache_folio(folio);
 
@@ -567,6 +583,9 @@ static int __mfill_atomic_pte(struct mfill_state *state,
 	uffd_flags_t flags = state->flags;
 	struct folio *folio;
 	int ret;
+	struct vm_area_struct *vma = state->vma;
+	unsigned int slice_idx = vma_address_to_slice(vma, dst_addr);
+	struct page *page;
 
 	if (!ops) {
 		VM_WARN_ONCE(1, "UFFDIO_COPY for unsupported VMA");
@@ -577,8 +596,10 @@ static int __mfill_atomic_pte(struct mfill_state *state,
 	if (!folio)
 		return -ENOMEM;
 
+	page = folio_page(folio, slice_idx);
+
 	if (uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY)) {
-		ret = mfill_copy_folio_locked(folio, src_addr);
+		ret = mfill_copy_folio_locked(folio, dst_addr, src_addr, vma);
 		/*
 		 * Fallback to copy_from_user outside mmap_lock.
 		 * If retry is successful, mfill_copy_folio_locked() returns
@@ -592,7 +613,7 @@ static int __mfill_atomic_pte(struct mfill_state *state,
 				goto err_folio_put;
 		}
 	} else if (uffd_flags_mode_is(flags, MFILL_ATOMIC_ZEROPAGE)) {
-		clear_user_highpage(&folio->page, state->dst_addr);
+		clear_user_highpage(page, state->dst_addr);
 	} else {
 		VM_WARN_ONCE(1, "Unknown UFFDIO operation, flags: %x", flags);
 	}
@@ -977,11 +998,13 @@ static __always_inline ssize_t mfill_atomic(struct userfaultfd_ctx *ctx,
 	long copied = 0;
 	ssize_t err;
 
+	unsigned int page_size = mm_pte_size(ctx->mm);
+
 	/*
 	 * Sanitize the command parameters:
 	 */
-	VM_WARN_ON_ONCE(dst_start & ~PAGE_MASK);
-	VM_WARN_ON_ONCE(len & ~PAGE_MASK);
+	VM_WARN_ON_ONCE(dst_start & ~mm_pte_mask(ctx->mm));
+	VM_WARN_ON_ONCE(len & ~mm_pte_mask(ctx->mm));
 
 	/* Does the address range wrap, or is the span zero-sized? */
 	VM_WARN_ON_ONCE(src_start + len <= src_start);
@@ -990,6 +1013,12 @@ static __always_inline ssize_t mfill_atomic(struct userfaultfd_ctx *ctx,
 	err = mfill_get_vma(&state);
 	if (err)
 		goto out;
+
+	if (!p3s_vma_validate_uffd_alignment(state.vma, dst_start, dst_start + len)) {
+		err = -EINVAL;
+		mfill_put_vma(&state);
+		goto out;
+	}
 
 	/*
 	 * If this is a HUGETLB vma, pass off to appropriate routine
@@ -1014,9 +1043,9 @@ static __always_inline ssize_t mfill_atomic(struct userfaultfd_ctx *ctx,
 		cond_resched();
 
 		if (!err) {
-			state.dst_addr += PAGE_SIZE;
-			state.src_addr += PAGE_SIZE;
-			copied += PAGE_SIZE;
+			state.dst_addr += page_size;
+			state.src_addr += page_size;
+			copied += page_size;
 
 			if (fatal_signal_pending(current))
 				err = -EINTR;
@@ -1115,8 +1144,8 @@ static int mwriteprotect_range(struct userfaultfd_ctx *ctx, unsigned long start,
 	/*
 	 * Sanitize the command parameters:
 	 */
-	VM_WARN_ON_ONCE(start & ~PAGE_MASK);
-	VM_WARN_ON_ONCE(len & ~PAGE_MASK);
+	VM_WARN_ON_ONCE(start & ~mm_pte_mask(dst_mm));
+	VM_WARN_ON_ONCE(len & ~mm_pte_mask(dst_mm));
 
 	/* Does the address range wrap, or is the span zero-sized? */
 	VM_WARN_ON_ONCE(start + len <= start);
@@ -1285,7 +1314,7 @@ static long move_present_ptes(struct mm_struct *mm,
 		folio_move_anon_rmap(src_folio, dst_vma);
 		src_folio->index = linear_page_index(dst_vma, dst_addr);
 
-		orig_dst_pte = folio_mk_pte(src_folio, dst_vma->vm_page_prot);
+		orig_dst_pte = pte_modify(orig_src_pte, dst_vma->vm_page_prot);
 		/* Set soft dirty bit so userspace can notice the pte was moved */
 		if (pgtable_supports_soft_dirty())
 			orig_dst_pte = pte_mksoft_dirty(orig_dst_pte);
@@ -1294,10 +1323,10 @@ static long move_present_ptes(struct mm_struct *mm,
 		orig_dst_pte = pte_mkwrite(orig_dst_pte, dst_vma);
 		set_pte_at(mm, dst_addr, dst_pte, orig_dst_pte);
 
-		src_addr += PAGE_SIZE;
+		src_addr += mm_pte_size(mm);
 		if (src_addr == src_end)
 			break;
-		dst_addr += PAGE_SIZE;
+		dst_addr += mm_pte_size(mm);
 		dst_pte++;
 		src_pte++;
 
@@ -1376,7 +1405,7 @@ static int move_swap_pte(struct mm_struct *mm, struct vm_area_struct *dst_vma,
 	set_pte_at(mm, dst_addr, dst_pte, orig_src_pte);
 	double_pt_unlock(dst_ptl, src_ptl);
 
-	return PAGE_SIZE;
+	return mm_pte_size(mm);
 }
 
 static int move_zeropage_pte(struct mm_struct *mm,
@@ -1403,7 +1432,7 @@ static int move_zeropage_pte(struct mm_struct *mm,
 	set_pte_at(mm, dst_addr, dst_pte, zero_pte);
 	double_pt_unlock(dst_ptl, src_ptl);
 
-	return PAGE_SIZE;
+	return mm_pte_size(mm);
 }
 
 
@@ -1490,7 +1519,7 @@ retry:
 		if (!(mode & UFFDIO_MOVE_MODE_ALLOW_SRC_HOLES))
 			ret = -ENOENT;
 		else /* nothing to do to move a hole */
-			ret = PAGE_SIZE;
+			ret = mm_pte_size(mm);
 		goto out;
 	}
 
@@ -1942,9 +1971,9 @@ static ssize_t move_pages(struct userfaultfd_ctx *ctx, unsigned long dst_start,
 	ssize_t moved = 0;
 
 	/* Sanitize the command parameters. */
-	VM_WARN_ON_ONCE(src_start & ~PAGE_MASK);
-	VM_WARN_ON_ONCE(dst_start & ~PAGE_MASK);
-	VM_WARN_ON_ONCE(len & ~PAGE_MASK);
+	VM_WARN_ON_ONCE(src_start & ~mm_pte_mask(mm));
+	VM_WARN_ON_ONCE(dst_start & ~mm_pte_mask(mm));
+	VM_WARN_ON_ONCE(len & ~mm_pte_mask(mm));
 
 	/* Does the address range wrap, or is the span zero-sized? */
 	VM_WARN_ON_ONCE(src_start + len < src_start);
