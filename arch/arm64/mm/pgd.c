@@ -10,12 +10,16 @@
 #include <linux/gfp.h>
 #include <linux/highmem.h>
 #include <linux/slab.h>
+#include <linux/p3s.h>
 
 #include <asm/pgalloc.h>
 #include <asm/page.h>
 #include <asm/tlbflush.h>
 
 static struct kmem_cache *pgd_cache __ro_after_init;
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+static struct kmem_cache *pgd_cache_4kb __ro_after_init;
+#endif
 
 static bool pgdir_is_page_size(void)
 {
@@ -32,6 +36,10 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 {
 	gfp_t gfp = GFP_PGTABLE_USER;
 
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(mm))
+		return kmem_cache_alloc(pgd_cache_4kb, gfp);
+#endif
 	if (pgdir_is_page_size())
 		return __pgd_alloc(mm, 0);
 	else
@@ -40,6 +48,12 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 
 void pgd_free(struct mm_struct *mm, pgd_t *pgd)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	if (mm_is_4kb(mm)) {
+		kmem_cache_free(pgd_cache_4kb, pgd);
+		return;
+	}
+#endif
 	if (pgdir_is_page_size())
 		__pgd_free(mm, pgd);
 	else
@@ -48,6 +62,10 @@ void pgd_free(struct mm_struct *mm, pgd_t *pgd)
 
 void __init pgtable_cache_init(void)
 {
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+	pgd_cache_4kb = kmem_cache_create("pgd_cache_4kb", PGD_SIZE_4KB,
+					  PGD_SIZE_4KB, SLAB_PANIC, NULL);
+#endif
 	if (pgdir_is_page_size())
 		return;
 

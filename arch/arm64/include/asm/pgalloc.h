@@ -18,6 +18,7 @@
 #include <asm-generic/pgalloc.h>
 
 #define PGD_SIZE	(PTRS_PER_PGD * sizeof(pgd_t))
+#define PGD_SIZE_4KB	(PTRS_PER_PGD_4KB * sizeof(pgd_t))
 
 #if CONFIG_PGTABLE_LEVELS > 2
 
