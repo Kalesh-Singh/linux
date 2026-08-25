@@ -13,6 +13,7 @@
 #include <asm/pgtable-hwdef.h>
 #include <asm/pgtable-prot.h>
 #include <asm/tlbflush.h>
+#include <linux/p3s.h>
 
 /*
  * VMALLOC range.
@@ -990,7 +991,8 @@ static inline phys_addr_t p4d_page_paddr(p4d_t p4d)
 	return __p4d_to_phys(p4d);
 }
 
-#define pud_index(addr)		(((addr) >> PUD_SHIFT) & (PTRS_PER_PUD - 1))
+#define pud_index(addr)		\
+	(((addr) >> mm_addr_pud_shift(addr)) & (mm_addr_ptrs_per_pud(addr) - 1))
 
 static inline pud_t *p4d_to_folded_pud(p4d_t *p4dp, unsigned long addr)
 {

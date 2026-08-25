@@ -101,13 +101,13 @@ static __always_inline bool mm_pte_aligned(const struct mm_struct *mm, unsigned 
 
 static inline unsigned long pte_index(unsigned long address)
 {
-	return (address >> PAGE_SHIFT) & (PTRS_PER_PTE - 1);
+	return (address >> mm_addr_page_shift(address)) & (mm_addr_ptrs_per_pte(address) - 1);
 }
 
 #ifndef pmd_index
 static inline unsigned long pmd_index(unsigned long address)
 {
-	return (address >> PMD_SHIFT) & (PTRS_PER_PMD - 1);
+	return (address >> mm_addr_pmd_shift(address)) & (mm_addr_ptrs_per_pmd(address) - 1);
 }
 #define pmd_index pmd_index
 #endif
@@ -115,14 +115,14 @@ static inline unsigned long pmd_index(unsigned long address)
 #ifndef pud_index
 static inline unsigned long pud_index(unsigned long address)
 {
-	return (address >> PUD_SHIFT) & (PTRS_PER_PUD - 1);
+	return (address >> mm_addr_pud_shift(address)) & (mm_addr_ptrs_per_pud(address) - 1);
 }
 #define pud_index pud_index
 #endif
 
 #ifndef pgd_index
 /* Must be a compile-time constant, so implement it as a macro */
-#define pgd_index(a)  (((a) >> PGDIR_SHIFT) & (PTRS_PER_PGD - 1))
+#define pgd_index(a)  (((a) >> mm_addr_pgd_shift(a)) & (mm_addr_ptrs_per_pgd(a) - 1))
 #endif
 
 #ifndef kernel_pte_init
@@ -1566,7 +1566,9 @@ static inline void arch_swap_restore(swp_entry_t entry, struct folio *folio)
  */
 
 #define pgd_addr_end(addr, end)						\
-({	unsigned long __boundary = ((addr) + PGDIR_SIZE) & PGDIR_MASK;	\
+({									\
+	unsigned long __boundary = ((addr) + mm_addr_pgdir_size(addr)) &\
+				   mm_addr_pgdir_mask(addr);		\
 	(__boundary - 1 < (end) - 1)? __boundary: (end);		\
 })
 
@@ -1586,7 +1588,9 @@ static inline void arch_swap_restore(swp_entry_t entry, struct folio *folio)
 
 #ifndef pmd_addr_end
 #define pmd_addr_end(addr, end)						\
-({	unsigned long __boundary = ((addr) + PMD_SIZE) & PMD_MASK;	\
+({									\
+	unsigned long __boundary = ((addr) + mm_addr_pmd_size(addr)) &	\
+				   mm_addr_pmd_mask(addr);		\
 	(__boundary - 1 < (end) - 1)? __boundary: (end);		\
 })
 #endif

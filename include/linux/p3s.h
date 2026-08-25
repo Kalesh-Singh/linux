@@ -2,18 +2,93 @@
 #ifndef _LINUX_P3S_H
 #define _LINUX_P3S_H
 
-#include <linux/types.h>
-#include <linux/mm_types.h>
+#include <linux/const.h>
 
 #define PAGE_SHIFT_4KB		12
-#define PAGE_SIZE_4KB		(1UL << PAGE_SHIFT_4KB)
+#define PAGE_SIZE_4KB		(_AC(1, UL) << PAGE_SHIFT_4KB)
 #define PAGE_MASK_4KB		(~(PAGE_SIZE_4KB - 1))
 
 #define VA_BITS_4KB		39
 
+#define LEVEL_SHIFT_4KB		(PAGE_SHIFT_4KB - 3)
+
+#define PMD_SHIFT_4KB		(PAGE_SHIFT_4KB + LEVEL_SHIFT_4KB)
+#define PUD_SHIFT_4KB		(PMD_SHIFT_4KB + LEVEL_SHIFT_4KB)
+#define P4D_SHIFT_4KB		(PUD_SHIFT_4KB + LEVEL_SHIFT_4KB)
+
+#if CONFIG_PGTABLE_LEVELS == 2
+#define PGD_SHIFT_4KB		PMD_SHIFT_4KB
+#elif CONFIG_PGTABLE_LEVELS == 3
+#define PGD_SHIFT_4KB		PUD_SHIFT_4KB
+#elif CONFIG_PGTABLE_LEVELS == 4
+#define PGD_SHIFT_4KB		P4D_SHIFT_4KB
+#elif CONFIG_PGTABLE_LEVELS == 5
+#define PGD_SHIFT_4KB		(P4D_SHIFT_4KB + LEVEL_SHIFT_4KB)
+#endif
+
+#define PTRS_PER_PTE_4KB	(_AC(1, UL) << LEVEL_SHIFT_4KB)
+#define PTRS_PER_PMD_4KB	(_AC(1, UL) << LEVEL_SHIFT_4KB)
+#define PTRS_PER_PUD_4KB	(_AC(1, UL) << LEVEL_SHIFT_4KB)
+#define PTRS_PER_P4D_4KB	(_AC(1, UL) << LEVEL_SHIFT_4KB)
+#define PTRS_PER_PGD_4KB	(_AC(1, UL) << (VA_BITS_4KB - PGD_SHIFT_4KB))
+
+#define PMD_SIZE_4KB		(_AC(1, UL) << PMD_SHIFT_4KB)
+#define PMD_MASK_4KB		(~(PMD_SIZE_4KB - 1))
+#define PUD_SIZE_4KB		(_AC(1, UL) << PUD_SHIFT_4KB)
+#define PUD_MASK_4KB		(~(PUD_SIZE_4KB - 1))
+#define PGDIR_SIZE_4KB		(_AC(1, UL) << PGD_SHIFT_4KB)
+#define PGDIR_MASK_4KB		(~(PGDIR_SIZE_4KB - 1))
+
 #define P3S_SLICE_SHIFT		(PAGE_SHIFT - PAGE_SHIFT_4KB)
-#define P3S_SLICES_PER_PAGE	(1UL << P3S_SLICE_SHIFT)
+#define P3S_SLICES_PER_PAGE	(_AC(1, UL) << P3S_SLICE_SHIFT)
 #define P3S_SLICE_MASK		(P3S_SLICES_PER_PAGE - 1)
+
+#ifndef __ASSEMBLY__
+
+#include <linux/types.h>
+#include <linux/mm_types.h>
+#include <linux/sched.h>
+
+#define IS_KERNEL_ADDR(addr)	((long)(addr) < 0)
+
+#define __MM_ADDR_EVAL(addr, kern_val, user_4k_val, user_native_val) \
+	(IS_KERNEL_ADDR(addr) ? (kern_val) : (mm_is_4kb(current ? current->mm : NULL) ? (user_4k_val) : (user_native_val)))
+
+#define mm_addr_page_shift(addr) \
+	__MM_ADDR_EVAL(addr, PAGE_SHIFT, PAGE_SHIFT_4KB, PAGE_SHIFT)
+
+#define mm_addr_ptrs_per_pte(addr) \
+	__MM_ADDR_EVAL(addr, PTRS_PER_PTE, PTRS_PER_PTE_4KB, PTRS_PER_PTE)
+
+#define mm_addr_pmd_shift(addr) \
+	__MM_ADDR_EVAL(addr, PMD_SHIFT, PMD_SHIFT_4KB, PMD_SHIFT)
+
+#define mm_addr_ptrs_per_pmd(addr) \
+	__MM_ADDR_EVAL(addr, PTRS_PER_PMD, PTRS_PER_PMD_4KB, PTRS_PER_PMD)
+
+#define mm_addr_pmd_size(addr) \
+	__MM_ADDR_EVAL(addr, PMD_SIZE, PMD_SIZE_4KB, PMD_SIZE)
+
+#define mm_addr_pmd_mask(addr) \
+	__MM_ADDR_EVAL(addr, PMD_MASK, PMD_MASK_4KB, PMD_MASK)
+
+#define mm_addr_pud_shift(addr) \
+	__MM_ADDR_EVAL(addr, PUD_SHIFT, PUD_SHIFT_4KB, PUD_SHIFT)
+
+#define mm_addr_ptrs_per_pud(addr) \
+	__MM_ADDR_EVAL(addr, PTRS_PER_PUD, PTRS_PER_PUD_4KB, PTRS_PER_PUD)
+
+#define mm_addr_pgd_shift(addr) \
+	__MM_ADDR_EVAL(addr, PGDIR_SHIFT, PGD_SHIFT_4KB, PGDIR_SHIFT)
+
+#define mm_addr_ptrs_per_pgd(addr) \
+	__MM_ADDR_EVAL(addr, PTRS_PER_PGD, PTRS_PER_PGD_4KB, PTRS_PER_PGD)
+
+#define mm_addr_pgdir_size(addr) \
+	__MM_ADDR_EVAL(addr, PGDIR_SIZE, PGDIR_SIZE_4KB, PGDIR_SIZE)
+
+#define mm_addr_pgdir_mask(addr) \
+	__MM_ADDR_EVAL(addr, PGDIR_MASK, PGDIR_MASK_4KB, PGDIR_MASK)
 
 static __always_inline unsigned int mm_pte_shift(const struct mm_struct *mm)
 {
@@ -167,5 +242,7 @@ static inline bool p3s_vma_validate_uffd_alignment(const struct vm_area_struct *
 	}
 	return true;
 }
+
+#endif /* !__ASSEMBLY__ */
 
 #endif /* _LINUX_P3S_H */
