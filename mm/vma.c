@@ -3087,7 +3087,7 @@ static int acct_stack_growth(struct vm_area_struct *vma,
 
 	/* mlock limit tests */
 	if (!mlock_future_ok(mm, vma_test(vma, VMA_LOCKED_BIT),
-			     grow << PAGE_SHIFT))
+			     grow << mm_pte_shift(mm)))
 		return -ENOMEM;
 
 	/* Check to ensure the stack will not grow into a hugetlb-only region */
@@ -3128,10 +3128,10 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 	mmap_assert_write_locked(mm);
 
 	/* Guard against exceeding limits of the address space. */
-	address &= PAGE_MASK;
-	if (address >= (TASK_SIZE & PAGE_MASK))
+	address &= mm_pte_mask(mm);
+	if (address >= (TASK_SIZE & mm_pte_mask(mm)))
 		return -ENOMEM;
-	address += PAGE_SIZE;
+	address += mm_pte_size(mm);
 
 	/* Enforce stack_guard_gap */
 	gap_addr = address + stack_guard_gap;
@@ -3170,10 +3170,10 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 		unsigned long size, grow;
 
 		size = address - vma->vm_start;
-		grow = (address - vma->vm_end) >> PAGE_SHIFT;
+		grow = (address - vma->vm_end) >> mm_pte_shift(mm);
 
 		error = -ENOMEM;
-		if (vma->vm_pgoff + (size >> PAGE_SHIFT) >= vma->vm_pgoff) {
+		if (vma->vm_pgoff + (size >> mm_pte_shift(mm)) >= vma->vm_pgoff) {
 			error = acct_stack_growth(vma, size, grow);
 			if (!error) {
 				if (vma_test(vma, VMA_LOCKED_BIT))
@@ -3212,7 +3212,7 @@ int expand_downwards(struct vm_area_struct *vma, unsigned long address)
 
 	mmap_assert_write_locked(mm);
 
-	address &= PAGE_MASK;
+	address &= mm_pte_mask(mm);
 	if (address < mmap_min_addr || address < FIRST_USER_ADDRESS)
 		return -EPERM;
 
@@ -3249,7 +3249,7 @@ int expand_downwards(struct vm_area_struct *vma, unsigned long address)
 		unsigned long size, grow;
 
 		size = vma->vm_end - address;
-		grow = (vma->vm_start - address) >> PAGE_SHIFT;
+		grow = (vma->vm_start - address) >> mm_pte_shift(mm);
 
 		error = -ENOMEM;
 		if (grow <= vma->vm_pgoff) {
