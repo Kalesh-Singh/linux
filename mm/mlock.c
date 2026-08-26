@@ -27,6 +27,7 @@
 #include <linux/secretmem.h>
 
 #include "internal.h"
+#include <linux/p3s_user_pages.h>
 
 struct mlock_fbatch {
 	local_lock_t lock;
@@ -352,6 +353,7 @@ static int mlock_pte_range(pmd_t *pmd, unsigned long addr,
 
 {
 	struct vm_area_struct *vma = walk->vma;
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	spinlock_t *ptl;
 	pte_t *start_pte, *pte;
 	pte_t ptent;
@@ -471,6 +473,7 @@ static int mlock_fixup(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	vma_flags_t new_vma_flags = legacy_to_vma_flags(newflags);
 	const vma_flags_t old_vma_flags = vma->flags;
 	struct mm_struct *mm = vma->vm_mm;
+	P3S_CONTEXT_REMOTE_MM(mm);
 	int nr_pages;
 	int ret = 0;
 
@@ -577,6 +580,7 @@ static int apply_vma_lock_flags(unsigned long start, size_t len,
 static unsigned long count_mm_mlocked_page_nr(struct mm_struct *mm,
 		unsigned long start, size_t len)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	struct vm_area_struct *vma;
 	unsigned long count = 0;
 	unsigned long end;
