@@ -37,6 +37,7 @@
 #include <asm/tlb.h>
 
 #include "internal.h"
+#include <linux/p3s_user_pages.h>
 
 static bool maybe_change_pte_writable(struct vm_area_struct *vma, pte_t pte)
 {
@@ -121,6 +122,7 @@ static __always_inline void prot_commit_flush_ptes(struct vm_area_struct *vma,
 		unsigned long addr, pte_t *ptep, pte_t oldpte, pte_t ptent,
 		int nr_ptes, int idx, bool set_write, struct mmu_gather *tlb)
 {
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	/*
 	 * Advance the position in the batch by idx; note that if idx > 0,
 	 * then the nr_ptes passed here is <= batch size - idx.
@@ -320,6 +322,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 		struct vm_area_struct *vma, pmd_t *pmd, unsigned long addr,
 		unsigned long end, pgprot_t newprot, unsigned long cp_flags)
 {
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	pte_t *pte, oldpte;
 	spinlock_t *ptl;
 	long pages = 0;
@@ -727,6 +730,7 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	       unsigned long start, unsigned long end, vm_flags_t newflags)
 {
 	struct mm_struct *mm = vma->vm_mm;
+	P3S_CONTEXT_REMOTE_MM(mm);
 	const vma_flags_t old_vma_flags = READ_ONCE(vma->flags);
 	vma_flags_t new_vma_flags = legacy_to_vma_flags(newflags);
 	long nrpages = (end - start) >> PAGE_SHIFT;
