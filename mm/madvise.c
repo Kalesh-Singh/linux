@@ -37,6 +37,7 @@
 
 #include "internal.h"
 #include "swap.h"
+#include <linux/p3s_user_pages.h>
 
 #define __MADV_SET_ANON_VMA_NAME (-1)
 
@@ -2018,6 +2019,7 @@ SYSCALL_DEFINE3(madvise, unsigned long, start, size_t, len_in, int, behavior)
 static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 			      int behavior)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	ssize_t ret = 0;
 	size_t total_len;
 	struct mmu_gather tlb;
