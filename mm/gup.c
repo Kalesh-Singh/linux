@@ -8,7 +8,6 @@
 #include <linux/memfd.h>
 #include <linux/memremap.h>
 #include <linux/pagemap.h>
-#include <linux/p3s.h>
 #include <linux/rmap.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>
@@ -1396,7 +1395,7 @@ static long __get_user_pages(struct mm_struct *mm,
 			}
 			vma = gup_vma_lookup(mm, start);
 			if (!vma && in_gate_area(mm, start)) {
-				ret = get_gate_page(mm, start & mm_pte_mask(mm),
+				ret = get_gate_page(mm, start & PAGE_MASK,
 						gup_flags, &vma,
 						pages ? &page : NULL);
 				if (ret)
@@ -1457,7 +1456,7 @@ retry:
 			goto out;
 		}
 next_page:
-		page_increm = 1 + (~(start >> mm_pte_shift(mm)) & page_mask);
+		page_increm = 1 + (~(start >> PAGE_SHIFT) & page_mask);
 		if (page_increm > nr_pages)
 			page_increm = nr_pages;
 
@@ -1497,13 +1496,13 @@ next_page:
 			for (j = 0; j < page_increm; j++) {
 				subpage = page + j;
 				pages[i + j] = subpage;
-				flush_anon_page(vma, subpage, start + j * mm_pte_size(mm));
+				flush_anon_page(vma, subpage, start + j * PAGE_SIZE);
 				flush_dcache_page(subpage);
 			}
 		}
 
 		i += page_increm;
-		start += page_increm * mm_pte_size(mm);
+		start += page_increm * PAGE_SIZE;
 		nr_pages -= page_increm;
 	} while (nr_pages);
 out:
@@ -1769,7 +1768,7 @@ retry:
 			break;
 		if (likely(pages))
 			pages++;
-		start += mm_pte_size(mm);
+		start += PAGE_SIZE;
 	}
 	if (must_unlock && *locked) {
 		/*
@@ -1815,13 +1814,13 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 		unsigned long start, unsigned long end, int *locked)
 {
 	struct mm_struct *mm = vma->vm_mm;
-	unsigned long nr_pages = (end - start) >> mm_pte_shift(mm);
+	unsigned long nr_pages = (end - start) / PAGE_SIZE;
 	int local_locked = 1;
 	int gup_flags;
 	long ret;
 
-	VM_WARN_ON_ONCE(!mm_pte_aligned(mm, start));
-	VM_WARN_ON_ONCE(!mm_pte_aligned(mm, end));
+	VM_WARN_ON_ONCE(!PAGE_ALIGNED(start));
+	VM_WARN_ON_ONCE(!PAGE_ALIGNED(end));
 	VM_WARN_ON_ONCE_VMA(start < vma->vm_start, vma);
 	VM_WARN_ON_ONCE_VMA(end   > vma->vm_end, vma);
 	mmap_assert_locked(mm);
@@ -1888,12 +1887,12 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 long faultin_page_range(struct mm_struct *mm, unsigned long start,
 			unsigned long end, bool write, int *locked)
 {
-	unsigned long nr_pages = (end - start) >> mm_pte_shift(mm);
+	unsigned long nr_pages = (end - start) / PAGE_SIZE;
 	int gup_flags;
 	long ret;
 
-	VM_WARN_ON_ONCE(!mm_pte_aligned(mm, start));
-	VM_WARN_ON_ONCE(!mm_pte_aligned(mm, end));
+	VM_WARN_ON_ONCE(!PAGE_ALIGNED(start));
+	VM_WARN_ON_ONCE(!PAGE_ALIGNED(end));
 	mmap_assert_locked(mm);
 
 	/*
@@ -1969,7 +1968,7 @@ int __mm_populate(unsigned long start, unsigned long len, int ignore_errors)
 			}
 			break;
 		}
-		nend = nstart + ((unsigned long)ret << mm_pte_shift(mm));
+		nend = nstart + ret * PAGE_SIZE;
 		ret = 0;
 	}
 	if (locked)
@@ -2607,18 +2606,14 @@ long get_user_pages_remote(struct mm_struct *mm,
 		int *locked)
 {
 	int local_locked = 1;
-	long ret;
 
 	if (!is_valid_gup_args(pages, locked, &gup_flags,
 			       FOLL_TOUCH | FOLL_REMOTE))
 		return -EINVAL;
 
-	mm_set_pgtable_mm(mm);
-	ret = __get_user_pages_locked(mm, start, nr_pages, pages,
+	return __get_user_pages_locked(mm, start, nr_pages, pages,
 				       locked ? locked : &local_locked,
 				       gup_flags);
-	mm_clear_pgtable_mm();
-	return ret;
 }
 EXPORT_SYMBOL(get_user_pages_remote);
 
@@ -2899,7 +2894,7 @@ static int gup_fast_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
 		folio_set_referenced(folio);
 		pages[*nr] = page;
 		(*nr)++;
-	} while (ptep++, addr += mm_pte_size(current_pgtable_mm()), addr != end);
+	} while (ptep++, addr += PAGE_SIZE, addr != end);
 
 	ret = 1;
 
@@ -3197,8 +3192,8 @@ static int gup_fast_fallback(unsigned long start, unsigned long nr_pages,
 	if (!(gup_flags & FOLL_FAST_ONLY))
 		might_lock_read(&current->mm->mmap_lock);
 
-	start = untagged_addr(start) & mm_pte_mask(current->mm);
-	len = (unsigned long)nr_pages << mm_pte_shift(current->mm);
+	start = untagged_addr(start) & PAGE_MASK;
+	len = nr_pages << PAGE_SHIFT;
 	if (check_add_overflow(start, len, &end))
 		return -EOVERFLOW;
 	if (end > TASK_SIZE_MAX)
@@ -3209,7 +3204,7 @@ static int gup_fast_fallback(unsigned long start, unsigned long nr_pages,
 		return nr_pinned;
 
 	/* Slow path: try to get the remaining pages with get_user_pages */
-	start += (unsigned long)nr_pinned << mm_pte_shift(current->mm);
+	start += nr_pinned << PAGE_SHIFT;
 	pages += nr_pinned;
 	ret = __gup_longterm_locked(current->mm, start, nr_pages - nr_pinned,
 				    pages, &locked,
