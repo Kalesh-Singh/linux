@@ -43,6 +43,7 @@
 
 #include <asm/tlbflush.h>
 #include "internal.h"
+#include <linux/p3s_user_pages.h>
 #include "mm_slot.h"
 
 #define CREATE_TRACE_POINTS
