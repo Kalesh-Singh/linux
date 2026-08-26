@@ -36,6 +36,8 @@
 #define PMD_MASK_4KB		(~(PMD_SIZE_4KB - 1))
 #define PUD_SIZE_4KB		(_AC(1, UL) << PUD_SHIFT_4KB)
 #define PUD_MASK_4KB		(~(PUD_SIZE_4KB - 1))
+#define P4D_SIZE_4KB		(_AC(1, UL) << P4D_SHIFT_4KB)
+#define P4D_MASK_4KB		(~(P4D_SIZE_4KB - 1))
 #define PGDIR_SIZE_4KB		(_AC(1, UL) << PGD_SHIFT_4KB)
 #define PGDIR_MASK_4KB		(~(PGDIR_SIZE_4KB - 1))
 
@@ -49,13 +51,33 @@
 #ifndef __ASSEMBLY__
 
 #include <linux/types.h>
-#include <linux/mm_types.h>
-#include <linux/sched.h>
+#include <asm/current.h>
+
+struct mm_struct;
+struct vm_area_struct;
+struct task_struct;
+struct linux_binprm;
+
+#ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
+unsigned long mm_task_size64(void);
+unsigned long mm_task_size64_of(struct mm_struct *mm);
+unsigned long mm_default_map_window64(void);
+#define PGTABLE_MM() \
+	((current && current->pgtable_mm) ? \
+	 current->pgtable_mm : (current ? (current->mm ? current->mm : current->active_mm) : NULL))
+#else
+#define mm_task_size64()		(1UL << vabits_actual)
+#define mm_task_size64_of(mm)		((void)(mm), (1UL << vabits_actual))
+#define mm_default_map_window64()	(1UL << VA_BITS_MIN)
+#define PGTABLE_MM()			(current ? (current->mm ? current->mm : current->active_mm) : NULL)
+#endif
+
+#define current_pgtable_mm()		PGTABLE_MM()
 
 #define IS_KERNEL_ADDR(addr)	((long)(addr) < 0)
 
 #define __MM_ADDR_EVAL(addr, kern_val, user_4k_val, user_native_val) \
-	(IS_KERNEL_ADDR(addr) ? (kern_val) : (mm_is_4kb(current ? current->mm : NULL) ? (user_4k_val) : (user_native_val)))
+	(IS_KERNEL_ADDR(addr) ? (kern_val) : (mm_is_4kb(current_pgtable_mm()) ? (user_4k_val) : (user_native_val)))
 
 #define mm_addr_page_shift(addr) \
 	__MM_ADDR_EVAL(addr, PAGE_SHIFT, PAGE_SHIFT_4KB, PAGE_SHIFT)
@@ -93,60 +115,59 @@
 #define mm_addr_pgdir_mask(addr) \
 	__MM_ADDR_EVAL(addr, PGDIR_MASK, PGDIR_MASK_4KB, PGDIR_MASK)
 
-static __always_inline unsigned int mm_pte_shift(const struct mm_struct *mm)
-{
 #ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
-	return (mm && mm->pte_shift) ? mm->pte_shift : PAGE_SHIFT;
+#define mm_pte_shift(mm)	((mm) && (mm)->pte_shift ? (mm)->pte_shift : PAGE_SHIFT)
+#define mm_is_4kb(mm)		((mm) ? ((mm)->pte_shift == PAGE_SHIFT_4KB) : false)
 #else
-	return PAGE_SHIFT;
+#define mm_pte_shift(mm)	PAGE_SHIFT
+#define mm_is_4kb(mm)		false
 #endif
-}
-#define mm_pte_shift mm_pte_shift
 
-static __always_inline unsigned long mm_pte_size(const struct mm_struct *mm)
-{
-	return 1UL << mm_pte_shift(mm);
-}
-#define mm_pte_size mm_pte_size
+#define mm_pte_size(mm)		(1UL << mm_pte_shift(mm))
+#define mm_pte_mask(mm)		(~(mm_pte_size(mm) - 1))
+#define mm_offset_in_pte(mm, addr)	((addr) & (mm_pte_size(mm) - 1))
+#define mm_pte_align(mm, val)		ALIGN(val, mm_pte_size(mm))
+#define mm_pte_align_down(mm, val)	ALIGN_DOWN(val, mm_pte_size(mm))
+#define mm_pte_aligned(mm, val)		(!((val) & (mm_pte_size(mm) - 1)))
+#define MM_PHYS_PFN(mm, x)		((x) >> mm_pte_shift(mm))
 
-static __always_inline unsigned long mm_pte_mask(const struct mm_struct *mm)
-{
-	return ~(mm_pte_size(mm) - 1);
-}
-#define mm_pte_mask mm_pte_mask
+#define MM_PAGE_SIZE(mm)	(mm_pte_size(mm))
+#define MM_PAGE_MASK(mm)	(mm_pte_mask(mm))
+#define MM_PMD_SIZE(mm)		(mm_is_4kb(mm) ? PMD_SIZE_4KB : PMD_SIZE)
+#define MM_PMD_MASK(mm)		(mm_is_4kb(mm) ? PMD_MASK_4KB : PMD_MASK)
+#define MM_PUD_MASK(mm)		(mm_is_4kb(mm) ? PUD_MASK_4KB : PUD_MASK)
+#define MM_P4D_MASK(mm)		(mm_is_4kb(mm) ? P4D_MASK_4KB : P4D_MASK)
+#define MM_PGDIR_MASK(mm)	(mm_is_4kb(mm) ? PGDIR_MASK_4KB : PGDIR_MASK)
 
-static __always_inline unsigned long mm_offset_in_pte(const struct mm_struct *mm, unsigned long addr)
-{
-	return addr & (mm_pte_size(mm) - 1);
-}
-#define mm_offset_in_pte mm_offset_in_pte
-
-static __always_inline unsigned long mm_pte_align(const struct mm_struct *mm, unsigned long val)
-{
-	return ALIGN(val, mm_pte_size(mm));
-}
-#define mm_pte_align mm_pte_align
-
-static __always_inline unsigned long mm_pte_align_down(const struct mm_struct *mm, unsigned long val)
-{
-	return ALIGN_DOWN(val, mm_pte_size(mm));
-}
-#define mm_pte_align_down mm_pte_align_down
-
-static __always_inline bool mm_pte_aligned(const struct mm_struct *mm, unsigned long val)
-{
-	return !(val & (mm_pte_size(mm) - 1));
-}
-#define mm_pte_aligned mm_pte_aligned
-
-static inline bool mm_is_4kb(const struct mm_struct *mm)
-{
 #ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
-	return mm ? (mm->pte_shift == PAGE_SHIFT_4KB) : false;
+#define mm_set_pgtable_mm(mm)		do { if (current) current->pgtable_mm = (mm); } while (0)
+#define mm_clear_pgtable_mm()		do { if (current) current->pgtable_mm = NULL; } while (0)
+#define mm_set_bprm_exec(bprm)		do { if (current) current->bprm_exec = (bprm); } while (0)
+#define mm_clear_bprm_exec()		do { if (current) current->bprm_exec = NULL; } while (0)
+#define mm_get_bprm_exec()		(current ? current->bprm_exec : NULL)
+
+#define mm_init_pagesize(mm, bprm)	do { \
+	if (personality_4kb_pages(current->personality)) \
+		(mm)->pte_shift = PAGE_SHIFT_4KB; \
+	else \
+		(mm)->pte_shift = PAGE_SHIFT; \
+} while (0)
 #else
-	return false;
+#define mm_set_pgtable_mm(mm)		do { } while (0)
+#define mm_clear_pgtable_mm()		do { } while (0)
+#define mm_set_bprm_exec(bprm)		do { } while (0)
+#define mm_clear_bprm_exec()		do { } while (0)
+#define mm_get_bprm_exec()		(NULL)
+#define mm_init_pagesize(mm, bprm)	do { } while (0)
 #endif
-}
+
+#endif /* !__ASSEMBLY__ */
+
+#endif /* _LINUX_P3S_H */
+
+#if defined(_LINUX_MMAP_LOCK_H) && !defined(_LINUX_P3S_VMA_INDEX_H)
+#define _LINUX_P3S_VMA_INDEX_H
+#ifndef __ASSEMBLY__
 
 #ifdef CONFIG_ARM64_PER_PROCESS_PAGE_SIZE
 static inline void vma_set_slice_off(struct vm_area_struct *vma, unsigned int val)
@@ -247,5 +268,4 @@ static inline bool p3s_vma_validate_uffd_alignment(const struct vm_area_struct *
 }
 
 #endif /* !__ASSEMBLY__ */
-
-#endif /* _LINUX_P3S_H */
+#endif /* _LINUX_MMAP_LOCK_H && !_LINUX_P3S_VMA_INDEX_H */
