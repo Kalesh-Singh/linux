@@ -17,6 +17,7 @@
 
 #include "../internal.h"
 #include "ops-common.h"
+#include <linux/p3s_user_pages.h>
 
 #ifdef CONFIG_DAMON_VADDR_KUNIT_TEST
 #undef DAMON_MIN_REGION_SZ
