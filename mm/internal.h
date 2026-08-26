@@ -1235,13 +1235,22 @@ static inline unsigned long vma_address(const struct vm_area_struct *vma,
 		pgoff_t pgoff, unsigned long nr_pages)
 {
 	unsigned long address;
+	unsigned int shift = (mm_is_4kb(vma->vm_mm) && !vma->vm_ops) ? PAGE_SHIFT_4KB : PAGE_SHIFT;
 
 	if (pgoff >= vma->vm_pgoff) {
 		address = vma->vm_start +
-			((pgoff - vma->vm_pgoff) << PAGE_SHIFT);
+			((pgoff - vma->vm_pgoff) << shift);
+		if (mm_is_4kb(vma->vm_mm) && vma->vm_ops)
+			address -= ((unsigned long)vma_slice_off(vma) << PAGE_SHIFT_4KB);
 		/* Check for address beyond vma (or wrapped through 0?) */
-		if (address < vma->vm_start || address >= vma->vm_end)
+		if (address < vma->vm_start) {
+			if (mm_is_4kb(vma->vm_mm) && pgoff == vma->vm_pgoff)
+				address = vma->vm_start;
+			else
+				address = -EFAULT;
+		} else if (address >= vma->vm_end) {
 			address = -EFAULT;
+		}
 	} else if (pgoff + nr_pages - 1 >= vma->vm_pgoff) {
 		/* Test above avoids possibility of wrap to 0 on 32-bit */
 		address = vma->vm_start;
