@@ -134,6 +134,9 @@ void __page_table_check_zero(struct page *page, unsigned int order)
 	struct page_ext_iter iter;
 	struct page_ext *page_ext;
 
+	if (static_branch_likely(&page_table_check_disabled))
+		return;
+
 	BUG_ON(PageSlab(page));
 
 	rcu_read_lock();
