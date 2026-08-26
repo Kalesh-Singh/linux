@@ -407,7 +407,7 @@ static bool move_normal_pmd(struct pagetable_move_control *pmc,
 	VM_BUG_ON(!pmd_none(*new_pmd));
 
 	pmd_populate(mm, new_pmd, pmd_pgtable(pmd));
-	flush_tlb_range(vma, pmc->old_addr, pmc->old_addr + PMD_SIZE);
+	flush_tlb_range(vma, pmc->old_addr, pmc->old_addr + MM_PMD_SIZE(mm));
 out_unlock:
 	if (new_ptl != old_ptl)
 		spin_unlock(new_ptl);
@@ -459,7 +459,7 @@ static bool move_normal_pud(struct pagetable_move_control *pmc,
 	VM_BUG_ON(!pud_none(*new_pud));
 
 	pud_populate(mm, new_pud, pud_pgtable(pud));
-	flush_tlb_range(vma, pmc->old_addr, pmc->old_addr + PUD_SIZE);
+	flush_tlb_range(vma, pmc->old_addr, pmc->old_addr + MM_PUD_SIZE(mm));
 	if (new_ptl != old_ptl)
 		spin_unlock(new_ptl);
 	spin_unlock(old_ptl);
@@ -549,13 +549,13 @@ static __always_inline unsigned long get_extent(enum pgt_entry entry,
 	switch (entry) {
 	case HPAGE_PMD:
 	case NORMAL_PMD:
-		mask = PMD_MASK;
-		size = PMD_SIZE;
+		mask = MM_PMD_MASK(pmc->old->vm_mm);
+		size = MM_PMD_SIZE(pmc->old->vm_mm);
 		break;
 	case HPAGE_PUD:
 	case NORMAL_PUD:
-		mask = PUD_MASK;
-		size = PUD_SIZE;
+		mask = MM_PUD_MASK(pmc->old->vm_mm);
+		size = MM_PUD_SIZE(pmc->old->vm_mm);
 		break;
 	default:
 		BUILD_BUG();
@@ -811,7 +811,7 @@ unsigned long move_page_tables(struct pagetable_move_control *pmc)
 	 * If possible, realign addresses to PMD boundary for faster copy.
 	 * Only realign if the mremap copying hits a PMD boundary.
 	 */
-	try_realign_addr(pmc, PMD_MASK);
+	try_realign_addr(pmc, MM_PMD_MASK(mm));
 
 	flush_cache_range(pmc->old, pmc->old_addr, pmc->old_end);
 	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, 0, mm,
@@ -838,7 +838,7 @@ unsigned long move_page_tables(struct pagetable_move_control *pmc)
 				/* We ignore and continue on error? */
 				continue;
 			}
-		} else if (IS_ENABLED(CONFIG_HAVE_MOVE_PUD) && extent == PUD_SIZE) {
+		} else if (IS_ENABLED(CONFIG_HAVE_MOVE_PUD) && extent == MM_PUD_SIZE(mm)) {
 			if (move_pgt_entry(pmc, NORMAL_PUD, old_pud, new_pud))
 				continue;
 		}
@@ -857,7 +857,7 @@ again:
 				continue;
 			split_huge_pmd(pmc->old, old_pmd, pmc->old_addr);
 		} else if (IS_ENABLED(CONFIG_HAVE_MOVE_PMD) &&
-			   extent == PMD_SIZE) {
+			   extent == MM_PMD_SIZE(mm)) {
 			/*
 			 * If the extent is PMD-sized, try to speed the move by
 			 * moving at the PMD level if possible.
