@@ -83,6 +83,7 @@
 
 #include "internal.h"
 #include "swap.h"
+#include <linux/p3s_user_pages.h>
 
 static struct kmem_cache *anon_vma_cachep;
 static struct kmem_cache *anon_vma_chain_cachep;
@@ -917,6 +918,7 @@ struct folio_referenced_arg {
 static bool folio_referenced_one(struct folio *folio,
 		struct vm_area_struct *vma, unsigned long address, void *arg)
 {
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	struct folio_referenced_arg *pra = arg;
 	DEFINE_FOLIO_VMA_WALK(pvmw, folio, vma, address, 0);
 	int ptes = 0, referenced = 0;
@@ -1642,6 +1644,7 @@ void folio_add_anon_rmap_pmd(struct folio *folio, struct page *page,
 void folio_add_new_anon_rmap(struct folio *folio, struct vm_area_struct *vma,
 		unsigned long address, rmap_t flags)
 {
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	const bool exclusive = flags & RMAP_EXCLUSIVE;
 	int nr = 1, nr_pmdmapped = 0;
 
@@ -1945,8 +1948,9 @@ static inline unsigned int folio_unmap_pte_batch(struct folio *folio,
 			struct page_vma_mapped_walk *pvmw,
 			enum ttu_flags flags, pte_t pte)
 {
-	unsigned long end_addr, addr = pvmw->address;
 	struct vm_area_struct *vma = pvmw->vma;
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
+	unsigned long end_addr, addr = pvmw->address;
 	unsigned int max_nr;
 
 	if (flags & TTU_HWPOISON)
