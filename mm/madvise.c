@@ -193,7 +193,7 @@ static int swapin_walk_pmd_entry(pmd_t *pmd, unsigned long start,
 	spinlock_t *ptl;
 	unsigned long addr;
 
-	for (addr = start; addr < end; addr += PAGE_SIZE) {
+	for (addr = start; addr < end; addr += mm_pte_size(vma->vm_mm)) {
 		pte_t pte;
 		softleaf_t entry;
 		struct folio *folio;
@@ -445,14 +445,14 @@ huge_unlock:
 
 regular_folio:
 #endif
-	tlb_change_page_size(tlb, PAGE_SIZE);
+	tlb_change_page_size(tlb, mm_pte_size(mm));
 restart:
 	start_pte = pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
 	if (!start_pte)
 		return 0;
 	flush_tlb_batched_pending(mm);
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, nr, PAGE_SIZE) {
+	for_each_pte_range(pte, addr, end, nr, mm_pte_size(mm)) {
 		ptent = ptep_get(pte);
 
 		if (++batch_count == SWAP_CLUSTER_MAX) {
@@ -667,13 +667,13 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 		if (madvise_free_huge_pmd(tlb, vma, pmd, addr, next))
 			return 0;
 
-	tlb_change_page_size(tlb, PAGE_SIZE);
+	tlb_change_page_size(tlb, mm_pte_size(mm));
 	start_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	if (!start_pte)
 		return 0;
 	flush_tlb_batched_pending(mm);
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, nr, PAGE_SIZE) {
+	for_each_pte_range(pte, addr, end, nr, mm_pte_size(mm)) {
 		ptent = ptep_get(pte);
 
 		if (pte_none(ptent))
@@ -687,7 +687,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 			softleaf_t entry = softleaf_from_pte(ptent);
 
 			if (softleaf_is_swap(entry)) {
-				max_nr = (end - addr) / PAGE_SIZE;
+				max_nr = (end - addr) / mm_pte_size(mm);
 				nr = swap_pte_batch(pte, max_nr, ptent);
 				nr_swap -= nr;
 				swap_put_entries_direct(entry, nr);
@@ -2172,9 +2172,9 @@ static int madvise_set_anon_name(struct mm_struct *mm, unsigned long start,
 		.anon_name = anon_name,
 	};
 
-	if (start & ~PAGE_MASK)
+	if (!mm_pte_aligned(mm, start))
 		return -EINVAL;
-	len = (len_in + ~PAGE_MASK) & PAGE_MASK;
+	len = mm_pte_align(mm, len_in);
 
 	/* Check to see whether len was rounded up from small -ve to zero */
 	if (len_in && !len)

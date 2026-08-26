@@ -89,7 +89,7 @@ static inline unsigned long elf_min_align(struct mm_struct *mm)
 #define ELF_CORE_EFLAGS	0
 #endif
 
-#define ELF_PAGESTART(mm, _v)	((_v) & ~(int)(ELF_MIN_ALIGN(mm) - 1))
+#define ELF_PAGESTART(mm, _v)	((_v) & ~(unsigned long)(ELF_MIN_ALIGN(mm) - 1))
 #define ELF_PAGEOFFSET(mm, _v)	((_v) & (ELF_MIN_ALIGN(mm) - 1))
 #define ELF_PAGEALIGN(mm, _v)	roundup((_v), ELF_MIN_ALIGN(mm))
 
