@@ -9,6 +9,7 @@
 #include <linux/page_table_check.h>
 #include <linux/swap.h>
 #include <linux/leafops.h>
+#include <linux/p3s_user_pages.h>
 
 #undef pr_fmt
 #define pr_fmt(fmt)	"page_table_check: " fmt
@@ -148,17 +149,19 @@ void __page_table_check_zero(struct page *page, unsigned int order)
 void __page_table_check_pte_clear(struct mm_struct *mm, unsigned long addr,
 				  pte_t pte)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	if (&init_mm == mm)
 		return;
 
 	if (pte_user_accessible_page(mm, addr, pte))
-		page_table_check_clear(pte_pfn(pte), PAGE_SIZE >> PAGE_SHIFT);
+		page_table_check_clear(pte_pfn(pte), 1);
 }
 EXPORT_SYMBOL(__page_table_check_pte_clear);
 
 void __page_table_check_pmd_clear(struct mm_struct *mm, unsigned long addr,
 				  pmd_t pmd)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	if (&init_mm == mm)
 		return;
 
@@ -170,6 +173,7 @@ EXPORT_SYMBOL(__page_table_check_pmd_clear);
 void __page_table_check_pud_clear(struct mm_struct *mm, unsigned long addr,
 				  pud_t pud)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	if (&init_mm == mm)
 		return;
 
@@ -199,6 +203,7 @@ static void page_table_check_pte_flags(pte_t pte)
 void __page_table_check_ptes_set(struct mm_struct *mm, unsigned long addr,
 				 pte_t *ptep, pte_t pte, unsigned int nr)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned int i;
 
 	if (&init_mm == mm)
@@ -206,10 +211,16 @@ void __page_table_check_ptes_set(struct mm_struct *mm, unsigned long addr,
 
 	page_table_check_pte_flags(pte);
 
-	for (i = 0; i < nr; i++)
-		__page_table_check_pte_clear(mm, addr + PAGE_SIZE * i, ptep_get(ptep + i));
-	if (pte_user_accessible_page(mm, addr, pte))
-		page_table_check_set(pte_pfn(pte), nr, pte_write(pte));
+	for (i = 0; i < nr; i++) {
+		unsigned long cur_addr = addr + PAGE_SIZE * i;
+		pte_t old_pte = ptep_get(ptep + i);
+		pte_t new_pte = pte_advance_phys(pte, PAGE_SIZE * i);
+
+		__page_table_check_pte_clear(mm, cur_addr, old_pte);
+
+		if (pte_user_accessible_page(mm, cur_addr, new_pte))
+			page_table_check_set(pte_pfn(new_pte), 1, pte_write(new_pte));
+	}
 }
 EXPORT_SYMBOL(__page_table_check_ptes_set);
 
@@ -228,6 +239,7 @@ static inline void page_table_check_pmd_flags(pmd_t pmd)
 void __page_table_check_pmds_set(struct mm_struct *mm, unsigned long addr,
 		pmd_t *pmdp, pmd_t pmd, unsigned int nr)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned long stride = PMD_SIZE >> PAGE_SHIFT;
 	unsigned int i;
 
@@ -246,6 +258,7 @@ EXPORT_SYMBOL(__page_table_check_pmds_set);
 void __page_table_check_puds_set(struct mm_struct *mm, unsigned long addr,
 		pud_t *pudp, pud_t pud,	unsigned int nr)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned long stride = PUD_SIZE >> PAGE_SHIFT;
 	unsigned int i;
 
@@ -263,20 +276,22 @@ void __page_table_check_pte_clear_range(struct mm_struct *mm,
 					unsigned long addr,
 					pmd_t pmd)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	if (&init_mm == mm)
 		return;
 
 	if (!pmd_bad(pmd) && !pmd_leaf(pmd)) {
 		pte_t *ptep = pte_offset_map(&pmd, addr);
 		unsigned long i;
+		unsigned long ptrs = mm_addr_ptrs_per_pte(addr);
 
 		if (WARN_ON(!ptep))
 			return;
-		for (i = 0; i < PTRS_PER_PTE; i++) {
+		for (i = 0; i < ptrs; i++) {
 			__page_table_check_pte_clear(mm, addr, ptep_get(ptep));
 			addr += PAGE_SIZE;
 			ptep++;
 		}
-		pte_unmap(ptep - PTRS_PER_PTE);
+		pte_unmap(ptep - ptrs);
 	}
 }
