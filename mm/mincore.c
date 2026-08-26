@@ -22,10 +22,12 @@
 #include <linux/uaccess.h>
 #include "swap.h"
 #include "internal.h"
+#include <linux/p3s_user_pages.h>
 
 static int mincore_hugetlb(pte_t *pte, unsigned long hmask, unsigned long addr,
 			unsigned long end, struct mm_walk *walk)
 {
+	P3S_CONTEXT_REMOTE_MM(walk->mm);
 #ifdef CONFIG_HUGETLB_PAGE
 	unsigned char present;
 	unsigned char *vec = walk->private;
@@ -135,6 +137,7 @@ static unsigned char mincore_page(struct address_space *mapping, pgoff_t index)
 static int __mincore_unmapped_range(unsigned long addr, unsigned long end,
 				struct vm_area_struct *vma, unsigned char *vec)
 {
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	unsigned long nr = (end - addr) >> PAGE_SHIFT;
 	int i;
 
@@ -163,6 +166,7 @@ static int mincore_unmapped_range(unsigned long addr, unsigned long end,
 static int mincore_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 			struct mm_walk *walk)
 {
+	P3S_CONTEXT_REMOTE_MM(walk->mm);
 	spinlock_t *ptl;
 	struct vm_area_struct *vma = walk->vma;
 	pte_t *ptep;
