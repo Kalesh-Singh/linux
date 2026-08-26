@@ -262,12 +262,12 @@ static int move_ptes(struct pagetable_move_control *pmc,
 	flush_tlb_batched_pending(vma->vm_mm);
 	lazy_mmu_mode_enable();
 
-	for (; old_addr < old_end; old_ptep += nr_ptes, old_addr += nr_ptes * PAGE_SIZE,
-		new_ptep += nr_ptes, new_addr += nr_ptes * PAGE_SIZE) {
+	for (; old_addr < old_end; old_ptep += nr_ptes, old_addr += nr_ptes * mm_pte_size(mm),
+		new_ptep += nr_ptes, new_addr += nr_ptes * mm_pte_size(mm)) {
 		VM_WARN_ON_ONCE(!pte_none(*new_ptep));
 
 		nr_ptes = 1;
-		max_nr_ptes = (old_end - old_addr) >> PAGE_SHIFT;
+		max_nr_ptes = (old_end - old_addr) >> mm_pte_shift(mm);
 		old_pte = ptep_get(old_ptep);
 		if (pte_none(old_pte))
 			continue;
