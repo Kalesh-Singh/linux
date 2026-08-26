@@ -7,6 +7,7 @@
 #include <linux/debugfs.h>
 #include <linux/highmem.h>
 #include "gup_test.h"
+#include <linux/p3s_user_pages.h>
 
 static void put_back_pages(unsigned int cmd, struct page **pages,
 			   unsigned long nr_pages, unsigned int gup_test_flags)
