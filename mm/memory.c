@@ -199,11 +199,11 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 		free_pte_range(tlb, pmd, addr);
 	} while (pmd++, addr = next, addr != end);
 
-	start &= PUD_MASK;
+	start &= MM_PUD_MASK(tlb->mm);
 	if (start < floor)
 		return;
 	if (ceiling) {
-		ceiling &= PUD_MASK;
+		ceiling &= MM_PUD_MASK(tlb->mm);
 		if (!ceiling)
 			return;
 	}
@@ -233,11 +233,11 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 		free_pmd_range(tlb, pud, addr, next, floor, ceiling);
 	} while (pud++, addr = next, addr != end);
 
-	start &= P4D_MASK;
+	start &= MM_P4D_MASK(tlb->mm);
 	if (start < floor)
 		return;
 	if (ceiling) {
-		ceiling &= P4D_MASK;
+		ceiling &= MM_P4D_MASK(tlb->mm);
 		if (!ceiling)
 			return;
 	}
@@ -267,11 +267,11 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 		free_pud_range(tlb, p4d, addr, next, floor, ceiling);
 	} while (p4d++, addr = next, addr != end);
 
-	start &= PGDIR_MASK;
+	start &= MM_PGDIR_MASK(tlb->mm);
 	if (start < floor)
 		return;
 	if (ceiling) {
-		ceiling &= PGDIR_MASK;
+		ceiling &= MM_PGDIR_MASK(tlb->mm);
 		if (!ceiling)
 			return;
 	}
@@ -328,26 +328,26 @@ void free_pgd_range(struct mmu_gather *tlb,
 	 * bother to round floor or end up - the tests don't need that.
 	 */
 
-	addr &= PMD_MASK;
+	addr &= MM_PMD_MASK(tlb->mm);
 	if (addr < floor) {
-		addr += PMD_SIZE;
+		addr += MM_PMD_SIZE(tlb->mm);
 		if (!addr)
 			return;
 	}
 	if (ceiling) {
-		ceiling &= PMD_MASK;
+		ceiling &= MM_PMD_MASK(tlb->mm);
 		if (!ceiling)
 			return;
 	}
 	if (end - 1 > ceiling - 1)
-		end -= PMD_SIZE;
+		end -= MM_PMD_SIZE(tlb->mm);
 	if (addr > end - 1)
 		return;
 	/*
 	 * We add page table cache pages with PAGE_SIZE,
 	 * (see pte_free_tlb()), flush the tlb if we need
 	 */
-	tlb_change_page_size(tlb, PAGE_SIZE);
+	tlb_change_page_size(tlb, MM_PAGE_SIZE(tlb->mm));
 	pgd = pgd_offset(tlb->mm, addr);
 	do {
 		next = pgd_addr_end(addr, end);
@@ -406,7 +406,7 @@ void free_pgtables(struct mmu_gather *tlb, struct unmap_desc *unmap)
 		/*
 		 * Optimization: gather nearby vmas into one call down
 		 */
-		while (next && next->vm_start <= vma->vm_end + PMD_SIZE) {
+		while (next && next->vm_start <= vma->vm_end + MM_PMD_SIZE(tlb->mm)) {
 			vma = next;
 			next = mas_find(mas, unmap->tree_end - 1);
 			if (unmap->mm_wr_locked)
@@ -5358,7 +5358,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 		goto oom;
 
 	nr_pages = folio_nr_pages(folio);
-	addr = ALIGN_DOWN(vmf->address, nr_pages * PAGE_SIZE);
+	addr = ALIGN_DOWN(vmf->address, nr_pages * mm_pte_size(vma->vm_mm));
 
 	/*
 	 * The memory barrier inside __folio_mark_uptodate makes sure that

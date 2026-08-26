@@ -38,6 +38,7 @@
 #include <linux/sched/sysctl.h>
 #include <linux/memory-tiers.h>
 #include <linux/compat.h>
+#include <linux/p3s.h>
 #include <linux/pgalloc.h>
 #include <linux/pgalloc_tag.h>
 #include <linux/pagewalk.h>
@@ -134,6 +135,9 @@ unsigned long __thp_vma_allowable_orders(struct vm_area_struct *vma,
 		return 0;
 
 	if (!vma->vm_mm)		/* vdso */
+		return 0;
+
+	if (mm_is_4kb(vma->vm_mm))
 		return 0;
 
 	if (thp_disabled_by_hw() || vma_thp_disabled(vma, vm_flags, forced_collapse))
