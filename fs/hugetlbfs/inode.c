@@ -104,6 +104,9 @@ static int hugetlbfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 	struct hstate *h = hstate_file(file);
 	vma_flags_t vma_flags;
 
+	if (mm_is_4kb(vma->vm_mm))
+		return -EINVAL;
+
 	/*
 	 * vma address alignment (but not the pgoff alignment) has
 	 * already been checked by prepare_hugepage_range.  If you add

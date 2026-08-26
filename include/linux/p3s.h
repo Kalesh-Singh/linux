@@ -135,6 +135,7 @@ unsigned long mm_default_map_window64(void);
 #define MM_PAGE_MASK(mm)	(mm_pte_mask(mm))
 #define MM_PMD_SIZE(mm)		(mm_is_4kb(mm) ? PMD_SIZE_4KB : PMD_SIZE)
 #define MM_PMD_MASK(mm)		(mm_is_4kb(mm) ? PMD_MASK_4KB : PMD_MASK)
+#define MM_PUD_SIZE(mm)		(mm_is_4kb(mm) ? PUD_SIZE_4KB : PUD_SIZE)
 #define MM_PUD_MASK(mm)		(mm_is_4kb(mm) ? PUD_MASK_4KB : PUD_MASK)
 #define MM_P4D_MASK(mm)		(mm_is_4kb(mm) ? P4D_MASK_4KB : P4D_MASK)
 #define MM_PGDIR_MASK(mm)	(mm_is_4kb(mm) ? PGDIR_MASK_4KB : PGDIR_MASK)

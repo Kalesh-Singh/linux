@@ -579,6 +579,10 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 		if (!file)
 			return -EBADF;
 		if (is_file_hugepages(file)) {
+			if (mm_is_4kb(current->mm)) {
+				retval = -EINVAL;
+				goto out_fput;
+			}
 			len = ALIGN(len, huge_page_size(hstate_file(file)));
 		} else if (unlikely(flags & MAP_HUGETLB)) {
 			retval = -EINVAL;
@@ -586,6 +590,9 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 		}
 	} else if (flags & MAP_HUGETLB) {
 		struct hstate *hs;
+
+		if (mm_is_4kb(current->mm))
+			return -EINVAL;
 
 		hs = hstate_sizelog((flags >> MAP_HUGE_SHIFT) & MAP_HUGE_MASK);
 		if (!hs)

@@ -5947,6 +5947,9 @@ vm_fault_t hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	struct hstate *h = hstate_vma(vma);
 	struct address_space *mapping;
 	bool need_wait_lock = false;
+
+	if (mm_is_4kb(mm))
+		return VM_FAULT_SIGBUS;
 	struct vm_fault vmf = {
 		.vma = vma,
 		.address = address & huge_page_mask(h),
