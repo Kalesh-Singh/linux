@@ -12,10 +12,10 @@
  * P3S: Global dummy variable for the Shadow Context Pattern.
  * Must always remain NULL and read-only.
  */
-struct mm_struct * const __p3s_shadow_mm = NULL;
+const struct mm_struct * const __p3s_shadow_mm = NULL;
 EXPORT_SYMBOL(__p3s_shadow_mm);
 
-unsigned long p3s_dynamic_page_shift(struct mm_struct *shadow_mm)
+unsigned long p3s_dynamic_page_shift(const struct mm_struct *shadow_mm)
 {
 	if (shadow_mm && shadow_mm->pte_shift)
 		return shadow_mm->pte_shift;
