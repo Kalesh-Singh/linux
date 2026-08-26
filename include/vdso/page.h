@@ -3,26 +3,22 @@
 #define __VDSO_PAGE_H
 
 #include <uapi/linux/const.h>
+#include <asm/p3s.h>
 
 /*
- * PAGE_SHIFT determines the page size.
- *
- * Note: This definition is required because PAGE_SHIFT is used
- * in several places throughout the codebase.
+ * 1. Define the absolute kernel constant (pinned to host page size, e.g. 16KB)
  */
-#define PAGE_SHIFT      CONFIG_PAGE_SHIFT
+#define KERNEL_PAGE_SHIFT   CONFIG_PAGE_SHIFT
+#define KERNEL_PAGE_SIZE    (_AC(1, UL) << KERNEL_PAGE_SHIFT)
+#define KERNEL_PAGE_MASK    (~(KERNEL_PAGE_SIZE - 1))
 
-#define PAGE_SIZE	(_AC(1,UL) << CONFIG_PAGE_SHIFT)
+/*
+ * PAGE_SHIFT determines the default compile-time page size across the kernel.
+ */
+#define PAGE_SHIFT          KERNEL_PAGE_SHIFT
+#define PAGE_SIZE           (_AC(1, UL) << PAGE_SHIFT)
 
 #if !defined(CONFIG_64BIT)
-/*
- * Applies only to 32-bit architectures.
- *
- * Subtle: (1 << CONFIG_PAGE_SHIFT) is an int, not an unsigned long.
- * So if we assign PAGE_MASK to a larger type it gets extended the
- * way we want (i.e. with 1s in the high bits) while masking a
- * 64-bit value such as phys_addr_t.
- */
 #define PAGE_MASK	(~((1 << CONFIG_PAGE_SHIFT) - 1))
 #else
 #define PAGE_MASK	(~(PAGE_SIZE - 1))
