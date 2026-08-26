@@ -48,7 +48,7 @@ static int mincore_hugetlb(pte_t *pte, unsigned long hmask, unsigned long addr,
 			present = 1;
 	}
 
-	for (; addr != end; vec++, addr += mm_pte_size(walk->mm))
+	for (; addr != end; vec++, addr += PAGE_SIZE)
 		*vec = present;
 	walk->private = vec;
 	spin_unlock(ptl);
@@ -135,7 +135,7 @@ static unsigned char mincore_page(struct address_space *mapping, pgoff_t index)
 static int __mincore_unmapped_range(unsigned long addr, unsigned long end,
 				struct vm_area_struct *vma, unsigned char *vec)
 {
-	unsigned long nr = (end - addr) >> mm_pte_shift(vma->vm_mm);
+	unsigned long nr = (end - addr) >> PAGE_SHIFT;
 	int i;
 
 	if (vma->vm_file) {
@@ -160,59 +160,58 @@ static int mincore_unmapped_range(unsigned long addr, unsigned long end,
 	return 0;
 }
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-static bool mincore_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
-				  unsigned long next, struct mm_walk *walk)
+static int mincore_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
+			struct mm_walk *walk)
 {
-	struct vm_area_struct *vma = walk->vma;
-	unsigned char *vec = walk->private;
-	int nr = (next - addr) >> mm_pte_shift(walk->mm);
 	spinlock_t *ptl;
+	struct vm_area_struct *vma = walk->vma;
+	pte_t *ptep;
+	unsigned char *vec = walk->private;
+	int nr = (end - addr) >> PAGE_SHIFT;
+	int step, i;
 
 	ptl = pmd_trans_huge_lock(pmd, vma);
-	if (!ptl)
-		return false;
-
-	memset(vec, 1, nr);
-	spin_unlock(ptl);
-	walk->private += nr;
-	return true;
-}
-#else
-static inline bool mincore_pmd_thp_entry(pmd_t *pmd, unsigned long addr,
-					 unsigned long next, struct mm_walk *walk)
-{
-	return false;
-}
-#endif
-
-static int mincore_pmd_entry(pmd_t *pmd, unsigned long addr,
-			     unsigned long next, struct mm_walk *walk)
-{
-	if (mincore_pmd_thp_entry(pmd, addr, next, walk))
-		walk->action = ACTION_CONTINUE;
-
-	return 0;
-}
-
-static int mincore_pte_entry(pte_t *pte, unsigned long addr,
-			     unsigned long next, struct mm_walk *walk)
-{
-	struct vm_area_struct *vma = walk->vma;
-	unsigned char *vec = walk->private;
-	pte_t ptent = ptep_get(pte);
-
-	if (pte_none(ptent) || pte_is_marker(ptent)) {
-		__mincore_unmapped_range(addr, next, vma, vec);
-	} else if (pte_present(ptent)) {
-		*vec = 1;
-	} else { /* pte is a swap entry */
-		const softleaf_t entry = softleaf_from_pte(ptent);
-
-		*vec = mincore_swap(entry, false);
+	if (ptl) {
+		memset(vec, 1, nr);
+		spin_unlock(ptl);
+		goto out;
 	}
 
-	walk->private += 1;
+	ptep = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
+	if (!ptep) {
+		walk->action = ACTION_AGAIN;
+		return 0;
+	}
+	for (; addr != end; ptep += step, addr += step * PAGE_SIZE) {
+		pte_t pte = ptep_get(ptep);
+
+		step = 1;
+		/* We need to do cache lookup too for markers */
+		if (pte_none(pte) || pte_is_marker(pte))
+			__mincore_unmapped_range(addr, addr + PAGE_SIZE,
+						 vma, vec);
+		else if (pte_present(pte)) {
+			unsigned int batch = pte_batch_hint(ptep, pte);
+
+			if (batch > 1) {
+				unsigned int max_nr = (end - addr) >> PAGE_SHIFT;
+
+				step = min_t(unsigned int, batch, max_nr);
+			}
+
+			for (i = 0; i < step; i++)
+				vec[i] = 1;
+		} else { /* pte is a swap entry */
+			const softleaf_t entry = softleaf_from_pte(pte);
+
+			*vec = mincore_swap(entry, false);
+		}
+		vec += step;
+	}
+	pte_unmap_unlock(ptep - 1, ptl);
+out:
+	walk->private += nr;
+	cond_resched();
 	return 0;
 }
 
@@ -233,8 +232,7 @@ static inline bool can_do_mincore(struct vm_area_struct *vma)
 }
 
 static const struct mm_walk_ops mincore_walk_ops = {
-	.pte_entry		= mincore_pte_entry,
-	.pmd_entry		= mincore_pmd_entry,
+	.pmd_entry		= mincore_pte_range,
 	.pte_hole		= mincore_unmapped_range,
 	.hugetlb_entry		= mincore_hugetlb,
 	.walk_lock		= PGWALK_RDLOCK,
@@ -254,16 +252,16 @@ static long do_mincore(unsigned long addr, unsigned long pages, unsigned char *v
 	vma = vma_lookup(current->mm, addr);
 	if (!vma)
 		return -ENOMEM;
-	end = min(vma->vm_end, addr + (pages << mm_pte_shift(current->mm)));
+	end = min(vma->vm_end, addr + (pages << PAGE_SHIFT));
 	if (!can_do_mincore(vma)) {
-		unsigned long pages = DIV_ROUND_UP(end - addr, mm_pte_size(current->mm));
+		unsigned long pages = DIV_ROUND_UP(end - addr, PAGE_SIZE);
 		memset(vec, 1, pages);
 		return pages;
 	}
 	err = walk_page_range(vma->vm_mm, addr, end, &mincore_walk_ops, vec);
 	if (err < 0)
 		return err;
-	return (end - addr) >> mm_pte_shift(current->mm);
+	return (end - addr) >> PAGE_SHIFT;
 }
 
 /*
@@ -300,7 +298,7 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 	start = untagged_addr(start);
 
 	/* Check the start address: needs to be page-aligned.. */
-	if (unlikely(!mm_pte_aligned(current->mm, start)))
+	if (unlikely(start & ~PAGE_MASK))
 		return -EINVAL;
 
 	/* ..and we need to be passed a valid user-space range */
@@ -308,8 +306,8 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 		return -ENOMEM;
 
 	/* This also avoids any overflows on PAGE_ALIGN */
-	pages = len >> mm_pte_shift(current->mm);
-	pages += (mm_offset_in_pte(current->mm, len)) != 0;
+	pages = len >> PAGE_SHIFT;
+	pages += (offset_in_page(len)) != 0;
 
 	if (!access_ok(vec, pages))
 		return -EFAULT;
@@ -336,7 +334,7 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 		}
 		pages -= retval;
 		vec += retval;
-		start += retval << mm_pte_shift(current->mm);
+		start += retval << PAGE_SHIFT;
 		retval = 0;
 	}
 	free_page((unsigned long) tmp);
