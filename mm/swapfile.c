@@ -48,6 +48,7 @@
 #include "swap_table.h"
 #include "internal.h"
 #include "swap.h"
+#include <linux/p3s_user_pages.h>
 
 static void swap_range_alloc(struct swap_info_struct *si,
 			     unsigned int nr_entries);
@@ -2515,6 +2516,7 @@ static int unuse_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 			unsigned long addr, unsigned long end,
 			unsigned int type)
 {
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	pte_t *pte = NULL;
 
 	do {
