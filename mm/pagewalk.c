@@ -30,16 +30,13 @@ static int walk_pte_range_inner(pte_t *pte, unsigned long addr,
 				unsigned long end, struct mm_walk *walk)
 {
 	const struct mm_walk_ops *ops = walk->ops;
-	unsigned long pte_size = mm_walk_pte_size(walk);
 	int err = 0;
 
 	for (;;) {
-		walk->step = 1;
-
 		if (ops->install_pte && pte_none(ptep_get(pte))) {
 			pte_t new_pte;
 
-			err = ops->install_pte(addr, addr + pte_size, &new_pte,
+			err = ops->install_pte(addr, addr + PAGE_SIZE, &new_pte,
 					       walk);
 			if (err)
 				break;
@@ -49,14 +46,14 @@ static int walk_pte_range_inner(pte_t *pte, unsigned long addr,
 			if (!WARN_ON_ONCE(walk->no_vma))
 				update_mmu_cache(walk->vma, addr, pte);
 		} else {
-			err = ops->pte_entry(pte, addr, addr + pte_size, walk);
+			err = ops->pte_entry(pte, addr, addr + PAGE_SIZE, walk);
 			if (err)
 				break;
 		}
-		if (addr >= end - walk->step * pte_size)
+		if (addr >= end - PAGE_SIZE)
 			break;
-		addr += walk->step * pte_size;
-		pte += walk->step;
+		addr += PAGE_SIZE;
+		pte++;
 	}
 	return err;
 }
@@ -485,7 +482,6 @@ int walk_page_range_mm_unsafe(struct mm_struct *mm, unsigned long start,
 		.ops		= ops,
 		.mm		= mm,
 		.private	= private,
-		.pte_size	= ops ? ops->pte_size : 0,
 	};
 
 	if (start >= end)
@@ -657,8 +653,7 @@ int walk_kernel_page_table_range_lockless(unsigned long start, unsigned long end
 		.mm		= &init_mm,
 		.pgd		= pgd,
 		.private	= private,
-		.no_vma		= true,
-		.pte_size	= ops ? ops->pte_size : 0,
+		.no_vma		= true
 	};
 
 	if (start >= end)
@@ -693,8 +688,7 @@ int walk_page_range_debug(struct mm_struct *mm, unsigned long start,
 		.mm		= mm,
 		.pgd		= pgd,
 		.private	= private,
-		.no_vma		= true,
-		.pte_size	= ops ? ops->pte_size : 0,
+		.no_vma		= true
 	};
 
 	/* For convenience, we allow traversal of kernel mappings. */
@@ -727,7 +721,6 @@ int walk_page_range_vma_unsafe(struct vm_area_struct *vma, unsigned long start,
 		.mm		= vma->vm_mm,
 		.vma		= vma,
 		.private	= private,
-		.pte_size	= ops ? ops->pte_size : 0,
 	};
 
 	if (start >= end || !walk.mm)
@@ -758,7 +751,6 @@ int walk_page_vma(struct vm_area_struct *vma, const struct mm_walk_ops *ops,
 		.mm		= vma->vm_mm,
 		.vma		= vma,
 		.private	= private,
-		.pte_size	= ops ? ops->pte_size : 0,
 	};
 
 	if (!walk.mm)
@@ -808,7 +800,6 @@ int walk_page_mapping(struct address_space *mapping, pgoff_t first_index,
 	struct mm_walk walk = {
 		.ops		= ops,
 		.private	= private,
-		.pte_size	= ops ? ops->pte_size : 0,
 	};
 	struct vm_area_struct *vma;
 	pgoff_t vba, vea, cba, cea;
