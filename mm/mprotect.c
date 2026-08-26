@@ -125,7 +125,7 @@ static __always_inline void prot_commit_flush_ptes(struct vm_area_struct *vma,
 	 * Advance the position in the batch by idx; note that if idx > 0,
 	 * then the nr_ptes passed here is <= batch size - idx.
 	 */
-	addr += idx * mm_pte_size(vma->vm_mm);
+	addr += idx * PAGE_SIZE;
 	ptep += idx;
 	oldpte = pte_advance_pfn(oldpte, idx);
 	ptent = pte_advance_pfn(ptent, idx);
@@ -135,7 +135,7 @@ static __always_inline void prot_commit_flush_ptes(struct vm_area_struct *vma,
 
 	modify_prot_commit_ptes(vma, addr, ptep, oldpte, ptent, nr_ptes);
 	if (pte_needs_flush(oldpte, ptent))
-		tlb_flush_pte_range(tlb, addr, nr_ptes * mm_pte_size(vma->vm_mm));
+		tlb_flush_pte_range(tlb, addr, nr_ptes * PAGE_SIZE);
 }
 
 /*
@@ -320,7 +320,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 		struct vm_area_struct *vma, pmd_t *pmd, unsigned long addr,
 		unsigned long end, pgprot_t newprot, unsigned long cp_flags)
 {
-	pte_t *start_pte, *pte, oldpte;
+	pte_t *pte, oldpte;
 	spinlock_t *ptl;
 	long pages = 0;
 	bool is_private_single_threaded;
@@ -328,9 +328,9 @@ static long change_pte_range(struct mmu_gather *tlb,
 	bool uffd_wp = cp_flags & MM_CP_UFFD_WP;
 	int nr_ptes;
 
-	tlb_change_page_size(tlb, mm_pte_size(vma->vm_mm));
-	start_pte = pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
-	if (!start_pte)
+	tlb_change_page_size(tlb, PAGE_SIZE);
+	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+	if (!pte)
 		return -EAGAIN;
 
 	if (prot_numa)
@@ -338,11 +338,12 @@ static long change_pte_range(struct mmu_gather *tlb,
 
 	flush_tlb_batched_pending(vma->vm_mm);
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, nr_ptes, mm_pte_size(vma->vm_mm)) {
+	do {
+		nr_ptes = 1;
 		oldpte = ptep_get(pte);
 		if (pte_present(oldpte)) {
 			const fpb_t flags = FPB_RESPECT_SOFT_DIRTY | FPB_RESPECT_WRITE;
-			int max_nr_ptes = (end - addr) >> mm_pte_shift(vma->vm_mm);
+			int max_nr_ptes = (end - addr) >> PAGE_SHIFT;
 			struct folio *folio = NULL;
 			struct page *page;
 
@@ -407,9 +408,9 @@ static long change_pte_range(struct mmu_gather *tlb,
 		} else  {
 			pages += change_softleaf_pte(vma, addr, pte, oldpte, cp_flags);
 		}
-	}
+	} while (pte += nr_ptes, addr += nr_ptes * PAGE_SIZE, addr != end);
 	lazy_mmu_mode_disable();
-	pte_unmap_unlock(start_pte, ptl);
+	pte_unmap_unlock(pte - 1, ptl);
 
 	return pages;
 }
@@ -728,7 +729,7 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	struct mm_struct *mm = vma->vm_mm;
 	const vma_flags_t old_vma_flags = READ_ONCE(vma->flags);
 	vma_flags_t new_vma_flags = legacy_to_vma_flags(newflags);
-	long nrpages = (end - start) >> mm_pte_shift(mm);
+	long nrpages = (end - start) >> PAGE_SHIFT;
 	unsigned int mm_cp_flags = 0;
 	unsigned long charged = 0;
 	int error;
@@ -850,11 +851,11 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 	if (grows == (PROT_GROWSDOWN|PROT_GROWSUP)) /* can't be both */
 		return -EINVAL;
 
-	if (!mm_pte_aligned(current->mm, start))
+	if (start & ~PAGE_MASK)
 		return -EINVAL;
 	if (!len)
 		return 0;
-	len = mm_pte_align(current->mm, len);
+	len = PAGE_ALIGN(len);
 	end = start + len;
 	if (end <= start)
 		return -ENOMEM;
