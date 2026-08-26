@@ -6,6 +6,7 @@
 #include <linux/mm_inline.h>
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
+#include <linux/p3s_user_pages.h>
 
 /**
  * struct wp_walk - Private struct for pagetable walk callbacks
@@ -34,6 +35,7 @@ struct wp_walk {
 static int wp_pte(pte_t *pte, unsigned long addr, unsigned long end,
 		  struct mm_walk *walk)
 {
+	P3S_CONTEXT_REMOTE_MM(walk->mm);
 	struct wp_walk *wpwalk = walk->private;
 	pte_t ptent = ptep_get(pte);
 
@@ -89,6 +91,7 @@ struct clean_walk {
 static int clean_record_pte(pte_t *pte, unsigned long addr,
 			    unsigned long end, struct mm_walk *walk)
 {
+	P3S_CONTEXT_REMOTE_MM(walk->mm);
 	struct wp_walk *wpwalk = walk->private;
 	struct clean_walk *cwalk = to_clean_walk(wpwalk);
 	pte_t ptent = ptep_get(pte);
