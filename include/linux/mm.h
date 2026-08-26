@@ -2608,11 +2608,10 @@ static inline pte_t folio_mk_pte(const struct folio *folio, pgprot_t pgprot)
 static inline pte_t folio_mk_pte_slice(struct folio *folio, pte_t pte,
 				       unsigned int slice_idx)
 {
-	phys_addr_t folio_phys = page_to_phys(&folio->page);
-	phys_addr_t target_phys = folio_phys + (slice_idx * PAGE_SIZE_4KB);
+	phys_addr_t slice_phys = (phys_addr_t)slice_idx * PAGE_SIZE_4KB;
 	pte_t clean_pte = clear_pte_slice_offset(pte);
 
-	return __pte(__phys_to_pte_val(target_phys) | pgprot_val(pte_pgprot(clean_pte)));
+	return __pte(pte_val(clean_pte) | __phys_to_pte_val(slice_phys));
 }
 
 static inline pte_t p3s_folio_mk_pte_slice(struct vm_area_struct *vma,

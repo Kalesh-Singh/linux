@@ -51,4 +51,21 @@ unsigned long mm_default_map_window64(void)
 	return 1UL << VA_BITS_MIN;
 }
 EXPORT_SYMBOL(mm_default_map_window64);
+
+static int __init parse_p3s(char *str)
+{
+	bool enabled;
+
+	if (!str) {
+		init_mm.pte_shift = PAGE_SHIFT_4KB;
+		return 0;
+	}
+
+	if (kstrtobool(str, &enabled))
+		return -EINVAL;
+
+	init_mm.pte_shift = enabled ? PAGE_SHIFT_4KB : PAGE_SHIFT;
+	return 0;
+}
+early_param("p3s", parse_p3s);
 #endif

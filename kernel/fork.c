@@ -1119,7 +1119,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p)
 	else if (current->mm)
 		mm->pte_shift = current->mm->pte_shift;
 	else
-		mm->pte_shift = PAGE_SHIFT;
+		mm->pte_shift = init_mm.pte_shift;
 #endif
 	if (current->mm) {
 		unsigned long flags = __mm_flags_get_word(current->mm);

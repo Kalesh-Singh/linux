@@ -149,8 +149,6 @@ unsigned long mm_default_map_window64(void);
 #define mm_init_pagesize(mm, bprm)	do { \
 	if (personality_4kb_pages(current->personality)) \
 		(mm)->pte_shift = PAGE_SHIFT_4KB; \
-	else \
-		(mm)->pte_shift = PAGE_SHIFT; \
 } while (0)
 #else
 #define mm_set_pgtable_mm(mm)		do { } while (0)
