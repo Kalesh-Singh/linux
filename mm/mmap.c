@@ -58,6 +58,7 @@
 #include <trace/events/mmap.h>
 
 #include "internal.h"
+#include <linux/p3s_user_pages.h>
 
 #ifndef arch_mmap_check
 #define arch_mmap_check(addr, len, flags)	(0)
@@ -230,6 +231,7 @@ static inline unsigned long round_hint_to_min(unsigned long hint)
 bool mlock_future_ok(const struct mm_struct *mm, bool is_vma_locked,
 		     unsigned long bytes)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned long locked_pages, limit_pages;
 
 	if (!is_vma_locked || capable(CAP_IPC_LOCK))
@@ -578,6 +580,10 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 		if (!file)
 			return -EBADF;
 		if (is_file_hugepages(file)) {
+			if (p3s_is_dynamic_page_size()) {
+				retval = -EINVAL;
+				goto out_fput;
+			}
 			len = ALIGN(len, huge_page_size(hstate_file(file)));
 		} else if (unlikely(flags & MAP_HUGETLB)) {
 			retval = -EINVAL;
@@ -585,6 +591,9 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 		}
 	} else if (flags & MAP_HUGETLB) {
 		struct hstate *hs;
+
+		if (p3s_is_dynamic_page_size())
+			return -EINVAL;
 
 		hs = hstate_sizelog((flags >> MAP_HUGE_SHIFT) & MAP_HUGE_MASK);
 		if (!hs)
@@ -1272,6 +1281,7 @@ unsigned long tear_down_vmas(struct mm_struct *mm, struct vma_iterator *vmi,
 /* Release all mmaps. */
 void exit_mmap(struct mm_struct *mm)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	struct mmu_gather tlb;
 	struct vm_area_struct *vma;
 	unsigned long nr_accounted = 0;
@@ -1333,6 +1343,7 @@ destroy:
 bool may_expand_vm(struct mm_struct *mm, const vma_flags_t *vma_flags,
 		   unsigned long npages)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	if (mm->total_vm + npages > rlimit(RLIMIT_AS) >> PAGE_SHIFT)
 		return false;
 
@@ -1453,6 +1464,7 @@ static struct vm_area_struct *__install_special_mapping(
 	vm_flags_t vm_flags, void *priv,
 	const struct vm_operations_struct *ops)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	int ret;
 	struct vm_area_struct *vma;
 
