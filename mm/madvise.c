@@ -1178,7 +1178,7 @@ static long madvise_guard_install(struct madvise_behavior *madv_behavior)
 
 		if (err == 0) {
 			unsigned long nr_expected_pages =
-				PHYS_PFN(range->end - range->start);
+				MM_PHYS_PFN(vma->vm_mm, range->end - range->start);
 
 			VM_WARN_ON(nr_pages != nr_expected_pages);
 			return 0;
