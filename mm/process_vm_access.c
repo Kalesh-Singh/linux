@@ -78,8 +78,8 @@ static int process_vm_rw_single_vec(unsigned long addr,
 				    struct task_struct *task,
 				    int vm_write)
 {
-	unsigned long pa = mm_pte_align_down(mm, addr);
-	unsigned long start_offset = mm_offset_in_pte(mm, addr);
+	unsigned long pa = addr & PAGE_MASK;
+	unsigned long start_offset = addr - pa;
 	unsigned long nr_pages;
 	ssize_t rc = 0;
 	unsigned int flags = 0;
@@ -87,7 +87,7 @@ static int process_vm_rw_single_vec(unsigned long addr,
 	/* Work out address and page range required */
 	if (len == 0)
 		return 0;
-	nr_pages = (addr + len - 1) / mm_pte_size(mm) - addr / mm_pte_size(mm) + 1;
+	nr_pages = (addr + len - 1) / PAGE_SIZE - addr / PAGE_SIZE + 1;
 
 	if (vm_write)
 		flags |= FOLL_WRITE;
@@ -111,7 +111,7 @@ static int process_vm_rw_single_vec(unsigned long addr,
 		if (pinned_pages <= 0)
 			return -EFAULT;
 
-		bytes = pinned_pages * mm_pte_size(mm) - start_offset;
+		bytes = pinned_pages * PAGE_SIZE - start_offset;
 		if (bytes > len)
 			bytes = len;
 
@@ -121,7 +121,7 @@ static int process_vm_rw_single_vec(unsigned long addr,
 		len -= bytes;
 		start_offset = 0;
 		nr_pages -= pinned_pages;
-		pa += pinned_pages * mm_pte_size(mm);
+		pa += pinned_pages * PAGE_SIZE;
 
 		/* If vm_write is set, the pages need to be made dirty: */
 		unpin_user_pages_dirty_lock(process_pages, pinned_pages,
