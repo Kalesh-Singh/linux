@@ -580,7 +580,7 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 		if (!file)
 			return -EBADF;
 		if (is_file_hugepages(file)) {
-			if (p3s_is_dynamic_page_size()) {
+			if (mm_is_4kb(current->mm)) {
 				retval = -EINVAL;
 				goto out_fput;
 			}
@@ -592,7 +592,7 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 	} else if (flags & MAP_HUGETLB) {
 		struct hstate *hs;
 
-		if (p3s_is_dynamic_page_size())
+		if (mm_is_4kb(current->mm))
 			return -EINVAL;
 
 		hs = hstate_sizelog((flags >> MAP_HUGE_SHIFT) & MAP_HUGE_MASK);
@@ -946,7 +946,7 @@ find_vma_prev(struct mm_struct *mm, unsigned long addr,
 }
 
 /* enforced gap between the expanding stack and other mappings. */
-unsigned long stack_guard_gap = 256UL<<PAGE_SHIFT;
+unsigned long stack_guard_gap = 256UL << KERNEL_PAGE_SHIFT;
 
 static int __init cmdline_parse_stack_guard_gap(char *p)
 {
