@@ -305,10 +305,9 @@ void munlock_folio(struct folio *folio)
 }
 
 static inline unsigned int folio_mlock_step(struct folio *folio,
-		struct vm_area_struct *vma, pte_t *pte, unsigned long addr,
-		unsigned long end)
+		pte_t *pte, unsigned long addr, unsigned long end)
 {
-	unsigned int count = (end - addr) >> mm_pte_shift(vma->vm_mm);
+	unsigned int count = (end - addr) >> PAGE_SHIFT;
 	pte_t ptent = ptep_get(pte);
 
 	if (!folio_test_large(folio))
@@ -342,77 +341,71 @@ static inline bool allow_mlock_munlock(struct folio *folio,
 		return false;
 
 	/* folio is not fully mapped, skip mlock */
-	if (step != mm_folio_nr_ptes(vma->vm_mm, folio))
+	if (step != folio_nr_pages(folio))
 		return false;
 
 	return true;
 }
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-static bool mlock_pmd_thp_entry(pmd_t *pmd, struct vm_area_struct *vma)
-{
-	struct folio *folio;
-	spinlock_t *ptl;
+static int mlock_pte_range(pmd_t *pmd, unsigned long addr,
+			   unsigned long end, struct mm_walk *walk)
 
-	ptl = pmd_trans_huge_lock(pmd, vma);
-	if (!ptl)
-		return false;
-
-	if (!pmd_present(*pmd) || is_huge_zero_pmd(*pmd))
-		goto out;
-
-	folio = pmd_folio(*pmd);
-	if (folio_is_zone_device(folio))
-		goto out;
-
-	if (vma->vm_flags & VM_LOCKED)
-		mlock_folio(folio);
-	else
-		munlock_folio(folio);
-out:
-	spin_unlock(ptl);
-	return true;
-}
-#else
-static inline bool mlock_pmd_thp_entry(pmd_t *pmd, struct vm_area_struct *vma)
-{
-	return false;
-}
-#endif
-
-static int mlock_pmd_entry(pmd_t *pmd, unsigned long addr,
-			   unsigned long next, struct mm_walk *walk)
-{
-	if (mlock_pmd_thp_entry(pmd, walk->vma))
-		walk->action = ACTION_CONTINUE;
-
-	return 0;
-}
-
-static int mlock_pte_entry(pte_t *pte, unsigned long addr,
-			   unsigned long next, struct mm_walk *walk)
 {
 	struct vm_area_struct *vma = walk->vma;
-	pte_t ptent = ptep_get(pte);
+	spinlock_t *ptl;
+	pte_t *start_pte, *pte;
+	pte_t ptent;
 	struct folio *folio;
+	unsigned int step = 1;
+	unsigned long start = addr;
 
-	if (!pte_present(ptent))
+	ptl = pmd_trans_huge_lock(pmd, vma);
+	if (ptl) {
+		if (!pmd_present(*pmd))
+			goto out;
+		if (is_huge_zero_pmd(*pmd))
+			goto out;
+		folio = pmd_folio(*pmd);
+		if (folio_is_zone_device(folio))
+			goto out;
+		if (vma->vm_flags & VM_LOCKED)
+			mlock_folio(folio);
+		else
+			munlock_folio(folio);
+		goto out;
+	}
+
+	start_pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+	if (!start_pte) {
+		walk->action = ACTION_AGAIN;
 		return 0;
+	}
 
-	folio = vm_normal_folio(vma, addr, ptent);
-	if (!folio || folio_is_zone_device(folio))
-		return 0;
+	for (pte = start_pte; addr != end; pte++, addr += PAGE_SIZE) {
+		ptent = ptep_get(pte);
+		if (!pte_present(ptent))
+			continue;
+		folio = vm_normal_folio(vma, addr, ptent);
+		if (!folio || folio_is_zone_device(folio))
+			continue;
 
-	walk->step = folio_mlock_step(folio, vma, pte, addr, vma->vm_end);
-	if (!allow_mlock_munlock(folio, vma, vma->vm_start, vma->vm_end,
-				 walk->step))
-		return 0;
+		step = folio_mlock_step(folio, pte, addr, end);
+		if (!allow_mlock_munlock(folio, vma, start, end, step))
+			goto next_entry;
 
-	if (vma->vm_flags & VM_LOCKED)
-		mlock_folio(folio);
-	else
-		munlock_folio(folio);
+		if (vma->vm_flags & VM_LOCKED)
+			mlock_folio(folio);
+		else
+			munlock_folio(folio);
 
+next_entry:
+		pte += step - 1;
+		addr += (step - 1) << PAGE_SHIFT;
+	}
+	pte_unmap(start_pte);
+out:
+	spin_unlock(ptl);
+	cond_resched();
 	return 0;
 }
 
@@ -432,8 +425,7 @@ static void mlock_vma_pages_range(struct vm_area_struct *vma,
 	vma_flags_t *new_vma_flags)
 {
 	static const struct mm_walk_ops mlock_walk_ops = {
-		.pte_entry = mlock_pte_entry,
-		.pmd_entry = mlock_pmd_entry,
+		.pmd_entry = mlock_pte_range,
 		.walk_lock = PGWALK_WRLOCK_VERIFY,
 	};
 
@@ -500,7 +492,7 @@ static int mlock_fixup(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	/*
 	 * Keep track of amount of locked VM.
 	 */
-	nr_pages = (end - start) >> mm_pte_shift(mm);
+	nr_pages = (end - start) >> PAGE_SHIFT;
 	if (!vma_flags_test(&new_vma_flags, VMA_LOCKED_BIT))
 		nr_pages = -nr_pages;
 	else if (vma_flags_test(&old_vma_flags, VMA_LOCKED_BIT))
@@ -532,8 +524,8 @@ static int apply_vma_lock_flags(unsigned long start, size_t len,
 	struct vm_area_struct *vma, *prev;
 	VMA_ITERATOR(vmi, current->mm, start);
 
-	VM_BUG_ON(!mm_pte_aligned(current->mm, start));
-	VM_BUG_ON(!mm_pte_aligned(current->mm, len));
+	VM_BUG_ON(offset_in_page(start));
+	VM_BUG_ON(len != PAGE_ALIGN(len));
 	end = start + len;
 	if (end < start)
 		return -EINVAL;
@@ -608,7 +600,7 @@ static unsigned long count_mm_mlocked_page_nr(struct mm_struct *mm,
 		}
 	}
 
-	return count >> mm_pte_shift(mm);
+	return count >> PAGE_SHIFT;
 }
 
 /*
@@ -634,12 +626,12 @@ static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t fla
 	if (!can_do_mlock())
 		return -EPERM;
 
-	len = mm_pte_align(current->mm, len + mm_offset_in_pte(current->mm, start));
-	start = mm_pte_align_down(current->mm, start);
+	len = PAGE_ALIGN(len + (offset_in_page(start)));
+	start &= PAGE_MASK;
 
 	lock_limit = rlimit(RLIMIT_MEMLOCK);
-	lock_limit >>= mm_pte_shift(current->mm);
-	locked = len >> mm_pte_shift(current->mm);
+	lock_limit >>= PAGE_SHIFT;
+	locked = len >> PAGE_SHIFT;
 
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
@@ -694,8 +686,8 @@ SYSCALL_DEFINE2(munlock, unsigned long, start, size_t, len)
 
 	start = untagged_addr(start);
 
-	len = mm_pte_align(current->mm, len + mm_offset_in_pte(current->mm, start));
-	start = mm_pte_align_down(current->mm, start);
+	len = PAGE_ALIGN(len + (offset_in_page(start)));
+	start &= PAGE_MASK;
 
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
@@ -769,7 +761,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
 		return -EPERM;
 
 	lock_limit = rlimit(RLIMIT_MEMLOCK);
-	lock_limit >>= mm_pte_shift(current->mm);
+	lock_limit >>= PAGE_SHIFT;
 
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
