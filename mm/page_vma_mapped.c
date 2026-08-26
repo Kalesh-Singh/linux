@@ -296,11 +296,11 @@ this_pte:
 			return true;
 next_pte:
 		do {
-			pvmw->address += mm_pte_size(mm);
+			pvmw->address += PAGE_SIZE;
 			if (pvmw->address >= end)
 				return not_found(pvmw);
 			/* Did we cross page table boundary? */
-			if ((pvmw->address & (PMD_SIZE - mm_pte_size(mm))) == 0) {
+			if ((pvmw->address & (PMD_SIZE - PAGE_SIZE)) == 0) {
 				if (pvmw->ptl) {
 					spin_unlock(pvmw->ptl);
 					pvmw->ptl = NULL;
