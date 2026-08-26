@@ -33,6 +33,7 @@
 
 #include "internal.h"
 #include "swap.h"
+#include <linux/p3s_user_pages.h>
 
 /**
  * kfree_const - conditionally free memory
