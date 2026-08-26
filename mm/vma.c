@@ -14,7 +14,7 @@
 		.addr = addr_,						\
 		.end = (addr_) + (len_),				\
 		.pgoff = pgoff_,					\
-		.pglen = PHYS_PFN(len_),				\
+		.pglen = MM_PHYS_PFN(mm_, len_),			\
 		.vma_flags = vma_flags_,				\
 		.file = file_,						\
 		.page_prot = vma_get_page_prot(vma_flags_),		\
@@ -2893,7 +2893,7 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	 * occur after forking, so the expand will only happen on new VMAs.
 	 */
 	if (vma && vma->vm_end == addr) {
-		VMG_STATE(vmg, mm, vmi, addr, addr + len, vma_flags, PHYS_PFN(addr));
+		VMG_STATE(vmg, mm, vmi, addr, addr + len, vma_flags, MM_PHYS_PFN(mm, addr));
 
 		vmg.prev = vma;
 		/* vmi is positioned at prev, which this mode expects. */
@@ -3283,7 +3283,7 @@ int __vm_munmap(unsigned long start, size_t len, bool unlock)
  */
 int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
 {
-	unsigned long charged = vma_pages(vma);
+	unsigned long charged = vma_nr_slices(vma);
 
 	if (find_vma_intersection(mm, vma->vm_start, vma->vm_end))
 		return -ENOMEM;

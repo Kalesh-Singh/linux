@@ -125,7 +125,7 @@ static __always_inline void prot_commit_flush_ptes(struct vm_area_struct *vma,
 	 * Advance the position in the batch by idx; note that if idx > 0,
 	 * then the nr_ptes passed here is <= batch size - idx.
 	 */
-	addr += idx * PAGE_SIZE;
+	addr += idx * mm_pte_size(vma->vm_mm);
 	ptep += idx;
 	oldpte = pte_advance_pfn(oldpte, idx);
 	ptent = pte_advance_pfn(ptent, idx);
@@ -135,7 +135,7 @@ static __always_inline void prot_commit_flush_ptes(struct vm_area_struct *vma,
 
 	modify_prot_commit_ptes(vma, addr, ptep, oldpte, ptent, nr_ptes);
 	if (pte_needs_flush(oldpte, ptent))
-		tlb_flush_pte_range(tlb, addr, nr_ptes * PAGE_SIZE);
+		tlb_flush_pte_range(tlb, addr, nr_ptes * mm_pte_size(vma->vm_mm));
 }
 
 /*
@@ -728,7 +728,7 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	struct mm_struct *mm = vma->vm_mm;
 	const vma_flags_t old_vma_flags = READ_ONCE(vma->flags);
 	vma_flags_t new_vma_flags = legacy_to_vma_flags(newflags);
-	long nrpages = (end - start) >> PAGE_SHIFT;
+	long nrpages = (end - start) >> mm_pte_shift(mm);
 	unsigned int mm_cp_flags = 0;
 	unsigned long charged = 0;
 	int error;

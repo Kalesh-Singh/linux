@@ -351,6 +351,7 @@ static inline bool vmg_nomem(struct vma_merge_struct *vmg)
 		.end = end_,						\
 		.vma_flags = vma_flags_,				\
 		.pgoff = pgoff_,					\
+		.slice_off = 0,						\
 		.state = VMA_MERGE_START,				\
 	}
 
@@ -365,6 +366,7 @@ static inline bool vmg_nomem(struct vma_merge_struct *vmg)
 		.end = end_,					\
 		.vm_flags = vma_->vm_flags,			\
 		.pgoff = vma_pgoff_offset(vma_, start_),	\
+		.slice_off = vma_slice_offset(vma_, start_),	\
 		.file = vma_->vm_file,				\
 		.anon_vma = vma_->anon_vma,			\
 		.policy = vma_policy(vma_),			\

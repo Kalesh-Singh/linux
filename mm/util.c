@@ -566,7 +566,7 @@ unsigned long vm_mmap_pgoff(struct file *file, unsigned long addr,
 	unsigned long len, unsigned long prot,
 	unsigned long flag, unsigned long pgoff)
 {
-	loff_t off = (loff_t)pgoff << PAGE_SHIFT;
+	loff_t off = (loff_t)pgoff << mm_pte_shift(current->mm);
 	unsigned long ret;
 	struct mm_struct *mm = current->mm;
 	unsigned long populate;
