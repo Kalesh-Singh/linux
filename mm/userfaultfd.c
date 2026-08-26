@@ -36,6 +36,7 @@
 #include <asm/tlb.h>
 #include "internal.h"
 #include "swap.h"
+#include <linux/p3s_user_pages.h>
 
 struct mfill_state {
 	struct userfaultfd_ctx *ctx;
@@ -370,6 +371,7 @@ static int mfill_atomic_install_pte(pmd_t *dst_pmd,
 	pte_t dst_ptep;
 
 	_dst_pte = mk_pte(page, dst_vma->vm_page_prot);
+	_dst_pte = p3s_folio_mk_pte_slice(dst_vma, folio, _dst_pte, dst_addr);
 	_dst_pte = pte_mkdirty(_dst_pte);
 	if (page_in_cache && !vm_shared)
 		writable = false;
@@ -427,8 +429,10 @@ out:
 	return ret;
 }
 
-static int mfill_copy_folio_locked(struct folio *folio, unsigned long src_addr)
+static int mfill_copy_folio_locked(struct folio *folio, unsigned long dst_addr,
+				   unsigned long src_addr, struct vm_area_struct *vma)
 {
+	unsigned int slice_idx = vma_address_to_slice(vma, dst_addr);
 	void *kaddr;
 	int ret;
 
@@ -449,7 +453,7 @@ static int mfill_copy_folio_locked(struct folio *folio, unsigned long src_addr)
 	 * and retry the copy outside the mmap_lock.
 	 */
 	pagefault_disable();
-	ret = copy_from_user(kaddr, (const void __user *) src_addr,
+	ret = copy_from_user(kaddr + slice_idx * PAGE_SIZE, (const void __user *) src_addr,
 			     PAGE_SIZE);
 	pagefault_enable();
 	kunmap_local(kaddr);
@@ -528,16 +532,21 @@ static int mfill_copy_folio_retry(struct mfill_state *mfill_state,
 	struct mfill_retry_state retry_state = { 0 };
 	struct mfill_retry_state *for_free __free(retry_put) = &retry_state;
 	unsigned long src_addr = mfill_state->src_addr;
+	unsigned long dst_addr = mfill_state->dst_addr;
+	unsigned int slice_idx = 0;
 	void *kaddr;
 	int err;
 
 	mfill_retry_state_save(&retry_state, mfill_state->vma);
 
+	if (mfill_state->vma)
+		slice_idx = vma_address_to_slice(mfill_state->vma, dst_addr);
+
 	/* retry copying with mm_lock dropped */
 	mfill_put_vma(mfill_state);
 
 	kaddr = kmap_local_folio(folio, 0);
-	err = copy_from_user(kaddr, (const void __user *) src_addr, PAGE_SIZE);
+	err = copy_from_user(kaddr + slice_idx * PAGE_SIZE, (const void __user *) src_addr, PAGE_SIZE);
 	kunmap_local(kaddr);
 	if (unlikely(err))
 		return -EFAULT;
@@ -567,6 +576,7 @@ static int __mfill_atomic_pte(struct mfill_state *state,
 	uffd_flags_t flags = state->flags;
 	struct folio *folio;
 	int ret;
+	struct vm_area_struct *vma = state->vma;
 
 	if (!ops) {
 		VM_WARN_ONCE(1, "UFFDIO_COPY for unsupported VMA");
@@ -578,7 +588,7 @@ static int __mfill_atomic_pte(struct mfill_state *state,
 		return -ENOMEM;
 
 	if (uffd_flags_mode_is(flags, MFILL_ATOMIC_COPY)) {
-		ret = mfill_copy_folio_locked(folio, src_addr);
+		ret = mfill_copy_folio_locked(folio, dst_addr, src_addr, vma);
 		/*
 		 * Fallback to copy_from_user outside mmap_lock.
 		 * If retry is successful, mfill_copy_folio_locked() returns
@@ -974,6 +984,7 @@ static __always_inline ssize_t mfill_atomic(struct userfaultfd_ctx *ctx,
 		.src_addr = src_start,
 		.dst_addr = dst_start,
 	};
+	P3S_CONTEXT_REMOTE_MM(ctx->mm);
 	long copied = 0;
 	ssize_t err;
 
@@ -1110,6 +1121,7 @@ static int mwriteprotect_range(struct userfaultfd_ctx *ctx, unsigned long start,
 	struct vm_area_struct *dst_vma;
 	unsigned long page_mask;
 	long err;
+	P3S_CONTEXT_REMOTE_MM(dst_mm);
 	VMA_ITERATOR(vmi, dst_mm, start);
 
 	/*
@@ -1251,6 +1263,7 @@ static long move_present_ptes(struct mm_struct *mm,
 	struct folio *src_folio = *first_src_folio;
 	unsigned long src_start = src_addr;
 	unsigned long src_end;
+	P3S_CONTEXT_REMOTE_MM(mm);
 
 	len = pmd_addr_end(dst_addr, dst_addr + len) - dst_addr;
 	src_end = pmd_addr_end(src_addr, src_addr + len);
@@ -1328,6 +1341,7 @@ static int move_swap_pte(struct mm_struct *mm, struct vm_area_struct *dst_vma,
 			 struct folio *src_folio,
 			 struct swap_info_struct *si, swp_entry_t entry)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	/*
 	 * Check if the folio still belongs to the target swap entry after
 	 * acquiring the lock. Folio can be freed in the swap cache while
@@ -1388,6 +1402,7 @@ static int move_zeropage_pte(struct mm_struct *mm,
 			     pmd_t *dst_pmd, pmd_t dst_pmdval,
 			     spinlock_t *dst_ptl, spinlock_t *src_ptl)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	pte_t zero_pte;
 
 	double_pt_lock(dst_ptl, src_ptl);
@@ -1418,6 +1433,7 @@ static long move_pages_ptes(struct mm_struct *mm, pmd_t *dst_pmd, pmd_t *src_pmd
 			    unsigned long dst_addr, unsigned long src_addr,
 			    unsigned long len, __u64 mode)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	struct swap_info_struct *si = NULL;
 	pte_t orig_src_pte, orig_dst_pte;
 	pte_t src_folio_pte;
@@ -1935,6 +1951,7 @@ static ssize_t move_pages(struct userfaultfd_ctx *ctx, unsigned long dst_start,
 		   unsigned long src_start, unsigned long len, __u64 mode)
 {
 	struct mm_struct *mm = ctx->mm;
+	P3S_CONTEXT_REMOTE_MM(mm);
 	struct vm_area_struct *src_vma, *dst_vma;
 	unsigned long src_addr, dst_addr, src_end;
 	pmd_t *src_pmd, *dst_pmd;
@@ -3543,6 +3560,7 @@ static __always_inline void wake_userfault(struct userfaultfd_ctx *ctx,
 static __always_inline int validate_unaligned_range(
 	struct mm_struct *mm, __u64 start, __u64 len)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	__u64 task_size = mm->task_size;
 
 	if (len & ~PAGE_MASK)
@@ -3561,6 +3579,7 @@ static __always_inline int validate_unaligned_range(
 static __always_inline int validate_range(struct mm_struct *mm,
 					  __u64 start, __u64 len)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	if (start & ~PAGE_MASK)
 		return -EINVAL;
 
