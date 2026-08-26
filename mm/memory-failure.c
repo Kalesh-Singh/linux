@@ -67,6 +67,7 @@
 
 #include "swap.h"
 #include "internal.h"
+#include <linux/p3s_user_pages.h>
 
 static int sysctl_memory_failure_early_kill __read_mostly;
 
@@ -727,36 +728,29 @@ static int check_hwpoisoned_pmd_entry(pmd_t *pmdp, unsigned long addr,
 }
 #endif
 
-static int hwpoison_pte_range(pmd_t *pmdp, unsigned long addr,
-			      unsigned long end, struct mm_walk *walk)
+static int hwpoison_pmd_entry(pmd_t *pmdp, unsigned long addr,
+			      unsigned long next, struct mm_walk *walk)
 {
 	struct hwpoison_walk *hwp = walk->private;
+	spinlock_t *ptl = pmd_trans_huge_lock(pmdp, walk->vma);
 	int ret = 0;
-	pte_t *ptep, *mapped_pte;
-	spinlock_t *ptl;
 
-	ptl = pmd_trans_huge_lock(pmdp, walk->vma);
 	if (ptl) {
 		ret = check_hwpoisoned_pmd_entry(pmdp, addr, hwp);
 		spin_unlock(ptl);
-		goto out;
+		walk->action = ACTION_CONTINUE;
 	}
-
-	mapped_pte = ptep = pte_offset_map_lock(walk->vma->vm_mm, pmdp,
-						addr, &ptl);
-	if (!ptep)
-		goto out;
-
-	for (; addr != end; ptep++, addr += PAGE_SIZE) {
-		ret = check_hwpoisoned_entry(ptep_get(ptep), addr, PAGE_SHIFT,
-					     hwp->pfn, &hwp->tk);
-		if (ret == 1)
-			break;
-	}
-	pte_unmap_unlock(mapped_pte, ptl);
-out:
-	cond_resched();
 	return ret;
+}
+
+static int hwpoison_pte_entry(pte_t *ptep, unsigned long addr,
+			      unsigned long next, struct mm_walk *walk)
+{
+	struct hwpoison_walk *hwp = walk->private;
+	P3S_CONTEXT_REMOTE_MM(walk->mm);
+
+	return check_hwpoisoned_entry(ptep_get(ptep), addr, PAGE_SHIFT,
+				      hwp->pfn, &hwp->tk);
 }
 
 #ifdef CONFIG_HUGETLB_PAGE
@@ -789,7 +783,8 @@ static int hwpoison_test_walk(unsigned long start, unsigned long end,
 }
 
 static const struct mm_walk_ops hwpoison_walk_ops = {
-	.pmd_entry = hwpoison_pte_range,
+	.pmd_entry = hwpoison_pmd_entry,
+	.pte_entry = hwpoison_pte_entry,
 	.hugetlb_entry = hwpoison_hugetlb_range,
 	.test_walk = hwpoison_test_walk,
 	.walk_lock = PGWALK_RDLOCK,
