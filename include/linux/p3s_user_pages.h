@@ -14,6 +14,12 @@
 #define PAGE_SIZE       (1UL << PAGE_SHIFT)
 #define PAGE_MASK       (~(PAGE_SIZE - 1))
 
+#undef PFN_PHYS
+#undef PHYS_PFN
+
+#define PFN_PHYS(x)	((phys_addr_t)(x) << CONFIG_PAGE_SHIFT)
+#define PHYS_PFN(x)	((unsigned long)((x) >> CONFIG_PAGE_SHIFT))
+
 #endif /* CONFIG_ARM64_PER_PROCESS_PAGE_SIZE */
 
 #endif /* _LINUX_P3S_USER_PAGES_H */
