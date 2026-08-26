@@ -39,6 +39,7 @@
 #include <linux/sched/signal.h>
 #include <linux/sched/numa_balancing.h>
 #include <linux/sched/task.h>
+#include <linux/p3s.h>
 #include <linux/pagemap.h>
 #include <linux/perf_event.h>
 #include <linux/highmem.h>
@@ -259,10 +260,16 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 	int err;
 	struct mm_struct *mm = NULL;
 
+	mm_set_bprm_exec(bprm);
 	bprm->mm = mm = mm_alloc();
+	mm_clear_bprm_exec();
+
 	err = -ENOMEM;
 	if (!mm)
 		goto err;
+
+	mm_init_pagesize(mm, bprm);
+	mm_set_pgtable_mm(mm);
 
 	/* Staged for would_dump() narrowing; consumed by begin_new_exec(). */
 	bprm->user_ns = get_user_ns(current_user_ns());
@@ -283,6 +290,7 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 	return 0;
 
 err:
+	mm_clear_pgtable_mm();
 	if (mm) {
 		bprm->mm = NULL;
 		mmdrop(mm);
@@ -619,8 +627,8 @@ int setup_arg_pages(struct linux_binprm *bprm,
 {
 	int ret;
 	unsigned long stack_shift;
-	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma = bprm->vma;
+	struct mm_struct *mm = vma->vm_mm;
 	struct vm_area_struct *prev = NULL;
 	vm_flags_t vm_flags;
 	unsigned long stack_base;
@@ -1178,6 +1186,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 * Release all of the old mmap stuff
 	 */
 	acct_arg_size(bprm, 0);
+	mm_clear_pgtable_mm();
 	retval = exec_mmap(bprm);
 	if (retval)
 		goto out;

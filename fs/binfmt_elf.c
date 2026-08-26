@@ -81,7 +81,7 @@ static int elf_core_dump(struct coredump_params *cprm);
 
 static inline unsigned long elf_min_align(struct mm_struct *mm)
 {
-	return max_t(unsigned long, ELF_EXEC_PAGESIZE, mm_pte_size(mm));
+	return mm_pte_size(mm);
 }
 #define ELF_MIN_ALIGN(mm)	elf_min_align(mm)
 
@@ -248,7 +248,7 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 	ARCH_DLINFO;
 #endif
 	NEW_AUX_ENT(AT_HWCAP, ELF_HWCAP);
-	NEW_AUX_ENT(AT_PAGESZ, mm_pte_size(bprm->mm));
+	NEW_AUX_ENT(AT_PAGESZ, mm_pte_size(current->mm));
 	NEW_AUX_ENT(AT_CLKTCK, CLOCKS_PER_SEC);
 	NEW_AUX_ENT(AT_PHDR, phdr_addr);
 	NEW_AUX_ENT(AT_PHENT, sizeof(struct elf_phdr));
