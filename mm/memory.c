@@ -89,6 +89,7 @@
 #include "pgalloc-track.h"
 #include "internal.h"
 #include "swap.h"
+#include <linux/p3s_user_pages.h>
 
 #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
 #warning Unfortunate NUMA and NUMA Balancing config, growing page-frame for last_cpupid.
@@ -186,6 +187,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 				unsigned long addr, unsigned long end,
 				unsigned long floor, unsigned long ceiling)
 {
+	P3S_CONTEXT_REMOTE_MM(tlb->mm);
 	pmd_t *pmd;
 	unsigned long next;
 	unsigned long start;
@@ -199,11 +201,11 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 		free_pte_range(tlb, pmd, addr);
 	} while (pmd++, addr = next, addr != end);
 
-	start &= MM_PUD_MASK(tlb->mm);
+	start &= PUD_MASK;
 	if (start < floor)
 		return;
 	if (ceiling) {
-		ceiling &= MM_PUD_MASK(tlb->mm);
+		ceiling &= PUD_MASK;
 		if (!ceiling)
 			return;
 	}
@@ -220,6 +222,7 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 				unsigned long addr, unsigned long end,
 				unsigned long floor, unsigned long ceiling)
 {
+	P3S_CONTEXT_REMOTE_MM(tlb->mm);
 	pud_t *pud;
 	unsigned long next;
 	unsigned long start;
@@ -233,11 +236,11 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 		free_pmd_range(tlb, pud, addr, next, floor, ceiling);
 	} while (pud++, addr = next, addr != end);
 
-	start &= MM_P4D_MASK(tlb->mm);
+	start &= P4D_MASK;
 	if (start < floor)
 		return;
 	if (ceiling) {
-		ceiling &= MM_P4D_MASK(tlb->mm);
+		ceiling &= P4D_MASK;
 		if (!ceiling)
 			return;
 	}
@@ -254,6 +257,7 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 				unsigned long addr, unsigned long end,
 				unsigned long floor, unsigned long ceiling)
 {
+	P3S_CONTEXT_REMOTE_MM(tlb->mm);
 	p4d_t *p4d;
 	unsigned long next;
 	unsigned long start;
@@ -267,11 +271,11 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 		free_pud_range(tlb, p4d, addr, next, floor, ceiling);
 	} while (p4d++, addr = next, addr != end);
 
-	start &= MM_PGDIR_MASK(tlb->mm);
+	start &= PGDIR_MASK;
 	if (start < floor)
 		return;
 	if (ceiling) {
-		ceiling &= MM_PGDIR_MASK(tlb->mm);
+		ceiling &= PGDIR_MASK;
 		if (!ceiling)
 			return;
 	}
@@ -299,6 +303,7 @@ void free_pgd_range(struct mmu_gather *tlb,
 			unsigned long addr, unsigned long end,
 			unsigned long floor, unsigned long ceiling)
 {
+	P3S_CONTEXT_REMOTE_MM(tlb->mm);
 	pgd_t *pgd;
 	unsigned long next;
 
@@ -328,26 +333,26 @@ void free_pgd_range(struct mmu_gather *tlb,
 	 * bother to round floor or end up - the tests don't need that.
 	 */
 
-	addr &= MM_PMD_MASK(tlb->mm);
+	addr &= PMD_MASK;
 	if (addr < floor) {
-		addr += MM_PMD_SIZE(tlb->mm);
+		addr += PMD_SIZE;
 		if (!addr)
 			return;
 	}
 	if (ceiling) {
-		ceiling &= MM_PMD_MASK(tlb->mm);
+		ceiling &= PMD_MASK;
 		if (!ceiling)
 			return;
 	}
 	if (end - 1 > ceiling - 1)
-		end -= MM_PMD_SIZE(tlb->mm);
+		end -= PMD_SIZE;
 	if (addr > end - 1)
 		return;
 	/*
 	 * We add page table cache pages with PAGE_SIZE,
 	 * (see pte_free_tlb()), flush the tlb if we need
 	 */
-	tlb_change_page_size(tlb, MM_PAGE_SIZE(tlb->mm));
+	tlb_change_page_size(tlb, PAGE_SIZE);
 	pgd = pgd_offset(tlb->mm, addr);
 	do {
 		next = pgd_addr_end(addr, end);
@@ -386,6 +391,7 @@ void free_pgtables(struct mmu_gather *tlb, struct unmap_desc *unmap)
 
 	tlb_free_vmas(tlb);
 
+	P3S_CONTEXT_REMOTE_MM(tlb->mm);
 	do {
 		unsigned long addr = vma->vm_start;
 		struct vm_area_struct *next;
@@ -406,7 +412,7 @@ void free_pgtables(struct mmu_gather *tlb, struct unmap_desc *unmap)
 		/*
 		 * Optimization: gather nearby vmas into one call down
 		 */
-		while (next && next->vm_start <= vma->vm_end + MM_PMD_SIZE(tlb->mm)) {
+		while (next && next->vm_start <= vma->vm_end + PMD_SIZE) {
 			vma = next;
 			next = mas_find(mas, unmap->tree_end - 1);
 			if (unmap->mm_wr_locked)
@@ -1239,6 +1245,7 @@ copy_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	struct folio *prealloc = NULL;
 	int nr;
 
+	P3S_CONTEXT_REMOTE_MM(src_mm);
 again:
 	progress = 0;
 	init_rss_vec(rss);
@@ -1317,7 +1324,7 @@ again:
 			WARN_ON_ONCE(ret != -ENOENT);
 		}
 		/* copy_present_ptes() will clear `*prealloc' if consumed */
-		max_nr = (end - addr) / mm_pte_size(src_vma->vm_mm);
+		max_nr = (end - addr) / PAGE_SIZE;
 		ret = copy_present_ptes(dst_vma, src_vma, dst_pte, src_pte,
 					ptent, addr, max_nr, rss, &prealloc);
 		/*
@@ -1339,7 +1346,7 @@ again:
 		}
 		nr = ret;
 		progress += 8 * nr;
-	} while (dst_pte += nr, src_pte += nr, addr += mm_pte_size(src_vma->vm_mm) * nr,
+	} while (dst_pte += nr, src_pte += nr, addr += PAGE_SIZE * nr,
 		 addr != end);
 
 	lazy_mmu_mode_disable();
@@ -1630,7 +1637,7 @@ zap_install_uffd_wp_if_needed(struct vm_area_struct *vma,
 		if (--nr == 0)
 			break;
 		pte++;
-		addr += mm_pte_size(vma->vm_mm);
+		addr += PAGE_SIZE;
 	}
 
 	return was_installed;
@@ -1812,7 +1819,7 @@ static inline int do_zap_pte_range(struct mmu_gather *tlb,
 				   bool *any_skipped)
 {
 	pte_t ptent = ptep_get(pte);
-	int max_nr = (end - addr) / mm_pte_size(vma->vm_mm);
+	int max_nr = (end - addr) / PAGE_SIZE;
 	int nr = 0;
 
 	/* Skip all consecutive none ptes */
@@ -1826,7 +1833,7 @@ static inline int do_zap_pte_range(struct mmu_gather *tlb,
 		if (!max_nr)
 			return nr;
 		pte += nr;
-		addr += nr * mm_pte_size(vma->vm_mm);
+		addr += nr * PAGE_SIZE;
 	}
 
 	if (pte_present(ptent))
@@ -1916,7 +1923,8 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	int nr;
 
 retry:
-	tlb_change_page_size(tlb, mm_pte_size(mm));
+	P3S_CONTEXT_REMOTE_MM(mm);
+	tlb_change_page_size(tlb, PAGE_SIZE);
 	init_rss_vec(rss);
 	start_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	if (!pte)
@@ -1924,7 +1932,7 @@ retry:
 
 	flush_tlb_batched_pending(mm);
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, nr, mm_pte_size(mm)) {
+	for_each_pte_range(pte, addr, end, nr, PAGE_SIZE) {
 		bool any_skipped = false;
 
 		if (need_resched()) {
@@ -1937,7 +1945,7 @@ retry:
 		if (any_skipped)
 			can_reclaim_pt = false;
 		if (unlikely(force_break)) {
-			addr += nr * mm_pte_size(mm);
+			addr += nr * PAGE_SIZE;
 			direct_reclaim = false;
 			break;
 		}
@@ -2468,7 +2476,7 @@ more:
 				remaining_pages_total -= pte_idx;
 				goto out;
 			}
-			addr += mm_pte_size(vma->vm_mm);
+			addr += PAGE_SIZE;
 			++curr_page_idx;
 		}
 		pte_unmap_unlock(start_pte, pte_lock);
@@ -2501,8 +2509,9 @@ out:
 int vm_insert_pages(struct vm_area_struct *vma, unsigned long addr,
 			struct page **pages, unsigned long *num)
 {
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	const unsigned long nr_pages = *num;
-	const unsigned long end = addr + mm_pte_size(vma->vm_mm) * nr_pages;
+	const unsigned long end = addr + PAGE_SIZE * nr_pages;
 
 	if (!range_in_vma(vma, addr, end))
 		return -EFAULT;
@@ -2518,6 +2527,7 @@ EXPORT_SYMBOL(vm_insert_pages);
 
 int map_kernel_pages_prepare(struct vm_area_desc *desc)
 {
+	P3S_CONTEXT_REMOTE_MM(desc->mm);
 	const struct mmap_action *action = &desc->action;
 	const unsigned long addr = action->map_kernel.start;
 	unsigned long nr_pages, end;
@@ -2529,7 +2539,7 @@ int map_kernel_pages_prepare(struct vm_area_desc *desc)
 	}
 
 	nr_pages = action->map_kernel.nr_pages;
-	end = addr + mm_pte_size(desc->mm) * nr_pages;
+	end = addr + PAGE_SIZE * nr_pages;
 	if (!range_in_vma_desc(desc, addr, end))
 		return -EFAULT;
 
@@ -2609,7 +2619,8 @@ EXPORT_SYMBOL(vm_insert_page);
 static int __vm_map_pages(struct vm_area_struct *vma, struct page **pages,
 				unsigned long num, unsigned long offset)
 {
-	unsigned long count = (vma->vm_end - vma->vm_start) >> mm_pte_shift(vma->vm_mm);
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
+	unsigned long count = (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
 	unsigned long uaddr = vma->vm_start;
 
 	/* Fail if the user requested offset is beyond the end of the object */
@@ -2913,6 +2924,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 			unsigned long addr, unsigned long end,
 			unsigned long pfn, pgprot_t prot)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	pte_t *pte, *mapped_pte;
 	spinlock_t *ptl;
 	int err = 0;
@@ -2922,7 +2934,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	if (!pte)
 		return -ENOMEM;
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, step, mm_pte_size(mm)) {
+	for_each_pte_range(pte, addr, end, step, PAGE_SIZE) {
 		BUG_ON(!pte_none(ptep_get(pte)));
 		if (!pfn_modify_allowed(pfn, prot)) {
 			err = -EACCES;
@@ -3314,6 +3326,7 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 				     pte_fn_t fn, void *data, bool create,
 				     pgtbl_mod_mask *mask)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	pte_t *pte, *mapped_pte;
 	int err = 0;
 	spinlock_t *ptl;
@@ -3336,7 +3349,7 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	lazy_mmu_mode_enable();
 
 	if (fn) {
-		for_each_pte_range(pte, addr, end, step, mm_pte_size(mm)) {
+		for_each_pte_range(pte, addr, end, step, PAGE_SIZE) {
 			if (create || !pte_none(ptep_get(pte))) {
 				err = fn(pte, addr, data);
 				if (err)
@@ -5358,7 +5371,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 		goto oom;
 
 	nr_pages = folio_nr_pages(folio);
-	addr = ALIGN_DOWN(vmf->address, nr_pages * mm_pte_size(vma->vm_mm));
+	addr = ALIGN_DOWN(vmf->address, nr_pages * PAGE_SIZE);
 
 	/*
 	 * The memory barrier inside __folio_mark_uptodate makes sure that
@@ -5748,7 +5761,7 @@ unlock:
 }
 
 static unsigned long fault_around_pages __read_mostly =
-	65536 >> PAGE_SHIFT;
+	65536 >> KERNEL_PAGE_SHIFT;
 
 #ifdef CONFIG_DEBUG_FS
 static int fault_around_bytes_get(void *data, u64 *val)
@@ -6436,9 +6449,10 @@ unlock:
 static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		unsigned long address, unsigned int flags)
 {
+	P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 	struct vm_fault vmf = {
 		.vma = vma,
-		.address = address & mm_pte_mask(vma->vm_mm),
+		.address = address & PAGE_MASK,
 		.real_address = address,
 		.flags = flags,
 		.pgoff = linear_page_index(vma, address),
@@ -7039,6 +7053,7 @@ EXPORT_SYMBOL_GPL(generic_access_phys);
 static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 			      void *buf, int len, unsigned int gup_flags)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	void *old_buf = buf;
 	int write = gup_flags & FOLL_WRITE;
 
@@ -7088,9 +7103,9 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 			if (bytes <= 0)
 				break;
 		} else {
-			unsigned int pg_size = mm_pte_size(mm);
+			unsigned int pg_size = PAGE_SIZE;
 			unsigned int slice_idx = vma_address_to_slice(vma, addr);
-			unsigned int page_offset = mm_offset_in_pte(mm, addr);
+			unsigned int page_offset = offset_in_page(addr);
 
 			folio = page_folio(page);
 			bytes = len;
