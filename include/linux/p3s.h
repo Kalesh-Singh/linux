@@ -133,6 +133,9 @@ unsigned long mm_default_map_window64(void);
 
 #define MM_PAGE_SIZE(mm)	(mm_pte_size(mm))
 #define MM_PAGE_MASK(mm)	(mm_pte_mask(mm))
+#define MM_PAGE_SHIFT(mm)	(mm_pte_shift(mm))
+#define MM_PAGE_ALIGN(mm, val)	(mm_pte_align(mm, val))
+#define MM_PAGE_ALIGNED(mm, val) (mm_pte_aligned(mm, val))
 #define MM_PMD_SIZE(mm)		(mm_is_4kb(mm) ? PMD_SIZE_4KB : PMD_SIZE)
 #define MM_PMD_MASK(mm)		(mm_is_4kb(mm) ? PMD_MASK_4KB : PMD_MASK)
 #define MM_PUD_SIZE(mm)		(mm_is_4kb(mm) ? PUD_SIZE_4KB : PUD_SIZE)

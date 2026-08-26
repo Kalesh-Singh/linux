@@ -2008,7 +2008,7 @@ static int pagemap_pte_hole(unsigned long start, unsigned long end,
 		else
 			hole_end = end;
 
-		for (; addr < hole_end; addr += PAGE_SIZE) {
+		for (; addr < hole_end; addr += MM_PAGE_SIZE(walk->mm)) {
 			err = add_to_pagemap(&pme, pm);
 			if (err)
 				goto out;
@@ -2020,7 +2020,7 @@ static int pagemap_pte_hole(unsigned long start, unsigned long end,
 		/* Addresses in the VMA. */
 		if (vma->vm_flags & VM_SOFTDIRTY)
 			pme = make_pme(0, PM_SOFT_DIRTY);
-		for (; addr < min(end, vma->vm_end); addr += PAGE_SIZE) {
+		for (; addr < min(end, vma->vm_end); addr += MM_PAGE_SIZE(walk->mm)) {
 			err = add_to_pagemap(&pme, pm);
 			if (err)
 				goto out;
@@ -2101,7 +2101,7 @@ static int pagemap_pmd_range_thp(pmd_t *pmdp, unsigned long addr,
 		unsigned long end, struct vm_area_struct *vma,
 		struct pagemapread *pm)
 {
-	unsigned int idx = (addr & ~PMD_MASK) >> PAGE_SHIFT;
+	unsigned int idx = (addr & ~PMD_MASK) >> MM_PAGE_SHIFT(vma->vm_mm);
 	u64 flags = 0, frame = 0;
 	pmd_t pmd = *pmdp;
 	struct page *page = NULL;
@@ -2151,7 +2151,7 @@ static int pagemap_pmd_range_thp(pmd_t *pmdp, unsigned long addr,
 	}
 
 populate_pagemap:
-	for (; addr != end; addr += PAGE_SIZE, idx++) {
+	for (; addr != end; addr += MM_PAGE_SIZE(vma->vm_mm), idx++) {
 		u64 cur_flags = flags;
 		pagemap_entry_t pme;
 
@@ -2255,12 +2255,12 @@ static int pagemap_hugetlb_range(pte_t *ptep, unsigned long hmask,
 		flags |= PM_PRESENT;
 		if (pm->show_pfn)
 			frame = pte_pfn(pte) +
-				((addr & ~hmask) >> PAGE_SHIFT);
+				((addr & ~hmask) >> MM_PAGE_SHIFT(walk->mm));
 	} else if (pte_swp_uffd_wp_any(pte)) {
 		flags |= PM_UFFD_WP;
 	}
 
-	for (; addr != end; addr += PAGE_SIZE) {
+	for (; addr != end; addr += MM_PAGE_SIZE(walk->mm)) {
 		pagemap_entry_t pme = make_pme(frame, flags);
 
 		err = add_to_pagemap(&pme, pm);
@@ -2324,6 +2324,7 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 	unsigned long svpfn;
 	unsigned long start_vaddr;
 	unsigned long end_vaddr;
+	unsigned int pgshift;
 	int ret = 0, copied = 0;
 
 	if (!mm || !mmget_not_zero(mm))
@@ -2341,7 +2342,8 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 	/* do not disclose physical addresses: attack vector */
 	pm.show_pfn = file_ns_capable(file, &init_user_ns, CAP_SYS_ADMIN);
 
-	pm.len = (PAGEMAP_WALK_SIZE >> PAGE_SHIFT);
+	pgshift = MM_PAGE_SHIFT(mm);
+	pm.len = (PAGEMAP_WALK_SIZE >> pgshift);
 	pm.buffer = kmalloc_array(pm.len, PM_ENTRY_BYTES, GFP_KERNEL);
 	ret = -ENOMEM;
 	if (!pm.buffer)
@@ -2353,16 +2355,16 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 
 	/* watch out for wraparound */
 	start_vaddr = end_vaddr;
-	if (svpfn <= (ULONG_MAX >> PAGE_SHIFT)) {
+	if (svpfn <= (ULONG_MAX >> pgshift)) {
 		unsigned long end;
 
 		ret = mmap_read_lock_killable(mm);
 		if (ret)
 			goto out_free;
-		start_vaddr = untagged_addr_remote(mm, svpfn << PAGE_SHIFT);
+		start_vaddr = untagged_addr_remote(mm, svpfn << pgshift);
 		mmap_read_unlock(mm);
 
-		end = start_vaddr + ((count / PM_ENTRY_BYTES) << PAGE_SHIFT);
+		end = start_vaddr + ((count / PM_ENTRY_BYTES) << pgshift);
 		if (end >= start_vaddr && end < mm->task_size)
 			end_vaddr = end;
 	}
@@ -2437,6 +2439,7 @@ static int pagemap_release(struct inode *inode, struct file *file)
 #define PM_SCAN_FLAGS		(PM_SCAN_WP_MATCHING | PM_SCAN_CHECK_WPASYNC)
 
 struct pagemap_scan_private {
+	struct mm_struct *mm;
 	struct pm_scan_arg arg;
 	unsigned long masks_of_interest, cur_vma_category;
 	struct page_region *vec_buf;
@@ -2655,7 +2658,7 @@ static void pagemap_scan_backout_range(struct pagemap_scan_private *p,
 	else
 		cur_buf->start = cur_buf->end = 0;
 
-	p->found_pages -= (end - addr) / PAGE_SIZE;
+	p->found_pages -= (end - addr) / MM_PAGE_SIZE(p->mm);
 }
 #endif
 
@@ -2760,6 +2763,7 @@ static int pagemap_scan_output(unsigned long categories,
 			       unsigned long addr, unsigned long *end)
 {
 	unsigned long n_pages, total_pages;
+	unsigned int page_size = MM_PAGE_SIZE(p->mm);
 	int ret = 0;
 
 	if (!p->vec_buf)
@@ -2767,11 +2771,11 @@ static int pagemap_scan_output(unsigned long categories,
 
 	categories &= p->arg.return_mask;
 
-	n_pages = (*end - addr) / PAGE_SIZE;
+	n_pages = (*end - addr) / page_size;
 	if (check_add_overflow(p->found_pages, n_pages, &total_pages) ||
 	    total_pages > p->arg.max_pages) {
 		size_t n_too_much = total_pages - p->arg.max_pages;
-		*end -= n_too_much * PAGE_SIZE;
+		*end -= n_too_much * page_size;
 		n_pages -= n_too_much;
 		ret = -ENOSPC;
 	}
@@ -3111,7 +3115,7 @@ static const struct mm_walk_ops pagemap_scan_ops = {
 	.post_vma = pagemap_scan_post_vma,
 };
 
-static int pagemap_scan_get_args(struct pm_scan_arg *arg,
+static int pagemap_scan_get_args(struct mm_struct *mm, struct pm_scan_arg *arg,
 				 unsigned long uarg)
 {
 	if (copy_from_user(arg, (void __user *)uarg, sizeof(*arg)))
@@ -3132,7 +3136,7 @@ static int pagemap_scan_get_args(struct pm_scan_arg *arg,
 	arg->vec = untagged_addr((unsigned long)arg->vec);
 
 	/* Validate memory pointers */
-	if (!IS_ALIGNED(arg->start, PAGE_SIZE))
+	if (!IS_ALIGNED(arg->start, MM_PAGE_SIZE(mm)))
 		return -EINVAL;
 	if (!access_ok((void __user *)(long)arg->start, arg->end - arg->start))
 		return -EFAULT;
@@ -3145,7 +3149,7 @@ static int pagemap_scan_get_args(struct pm_scan_arg *arg,
 		return -EFAULT;
 
 	/* Fixup default values */
-	arg->end = ALIGN(arg->end, PAGE_SIZE);
+	arg->end = ALIGN(arg->end, MM_PAGE_SIZE(mm));
 	arg->walk_end = 0;
 	if (!arg->max_pages)
 		arg->max_pages = ULONG_MAX;
@@ -3169,7 +3173,7 @@ static int pagemap_scan_init_bounce_buffer(struct pagemap_scan_private *p)
 	if (!p->arg.vec_len)
 		return 0;
 
-	p->vec_buf_len = min_t(size_t, PAGEMAP_WALK_SIZE >> PAGE_SHIFT,
+	p->vec_buf_len = min_t(size_t, PAGEMAP_WALK_SIZE >> MM_PAGE_SHIFT(p->mm),
 			       p->arg.vec_len);
 	p->vec_buf = kmalloc_objs(*p->vec_buf, p->vec_buf_len);
 	if (!p->vec_buf)
@@ -3210,13 +3214,13 @@ static long pagemap_scan_flush_buffer(struct pagemap_scan_private *p)
 
 static long do_pagemap_scan(struct mm_struct *mm, unsigned long uarg)
 {
-	struct pagemap_scan_private p = {0};
+	struct pagemap_scan_private p = { .mm = mm };
 	struct mm_walk_ops ops = pagemap_scan_ops;
 	unsigned long walk_start;
 	size_t n_ranges_out = 0;
 	int ret;
 
-	ret = pagemap_scan_get_args(&p.arg, uarg);
+	ret = pagemap_scan_get_args(mm, &p.arg, uarg);
 	if (ret)
 		return ret;
 
@@ -3276,6 +3280,8 @@ static long do_pagemap_scan(struct mm_struct *mm, unsigned long uarg)
 	}
 
 	/* ENOSPC signifies early stop (buffer full) from the walk. */
+	if (!ret)
+		p.arg.walk_end = p.arg.end;
 	if (!ret || ret == -ENOSPC)
 		ret = n_ranges_out;
 
