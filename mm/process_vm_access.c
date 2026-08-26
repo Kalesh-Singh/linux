@@ -14,6 +14,7 @@
 #include <linux/ptrace.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
+#include <linux/p3s_user_pages.h>
 
 /**
  * process_vm_rw_pages - read/write pages from task specified
@@ -78,6 +79,7 @@ static int process_vm_rw_single_vec(unsigned long addr,
 				    struct task_struct *task,
 				    int vm_write)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned long pa = addr & PAGE_MASK;
 	unsigned long start_offset = addr - pa;
 	unsigned long nr_pages;
