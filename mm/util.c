@@ -566,7 +566,7 @@ unsigned long vm_mmap_pgoff(struct file *file, unsigned long addr,
 	unsigned long len, unsigned long prot,
 	unsigned long flag, unsigned long pgoff)
 {
-	loff_t off = (loff_t)pgoff << mm_pte_shift(current->mm);
+	loff_t off = (loff_t)pgoff << PAGE_SHIFT;
 	unsigned long ret;
 	struct mm_struct *mm = current->mm;
 	unsigned long populate;
@@ -609,12 +609,12 @@ unsigned long vm_mmap(struct file *file, unsigned long addr,
 	unsigned long len, unsigned long prot,
 	unsigned long flag, unsigned long offset)
 {
-	if (unlikely(offset + mm_pte_align(current->mm, len) < offset))
+	if (unlikely(offset + PAGE_ALIGN(len) < offset))
 		return -EINVAL;
-	if (unlikely(!mm_pte_aligned(current->mm, offset)))
+	if (unlikely(offset_in_page(offset)))
 		return -EINVAL;
 
-	return vm_mmap_pgoff(file, addr, len, prot, flag, offset >> mm_pte_shift(current->mm));
+	return vm_mmap_pgoff(file, addr, len, prot, flag, offset >> PAGE_SHIFT);
 }
 EXPORT_SYMBOL(vm_mmap);
 
