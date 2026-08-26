@@ -7,6 +7,7 @@
 
 #include "vma_internal.h"
 #include "vma.h"
+#include <linux/p3s_user_pages.h>
 
 /*
  * Relocate a VMA downwards by shift bytes. There cannot be any VMAs between
@@ -108,6 +109,7 @@ int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift)
 int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
 			  unsigned long *top_mem_p)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned long flags = VM_STACK_FLAGS | VM_STACK_INCOMPLETE_SETUP;
 	int err;
 	struct vm_area_struct *vma = vm_area_alloc(mm);
