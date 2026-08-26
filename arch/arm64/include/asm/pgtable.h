@@ -134,9 +134,9 @@ static inline pteval_t __phys_to_pte_val(phys_addr_t phys)
 }
 #endif
 
-#define pte_pfn(pte)		(__pte_to_phys(pte) >> PAGE_SHIFT)
+#define pte_pfn(pte)		(__pte_to_phys(pte) >> KERNEL_PAGE_SHIFT)
 #define pfn_pte(pfn,prot)	\
-	__pte(__phys_to_pte_val((phys_addr_t)(pfn) << PAGE_SHIFT) | pgprot_val(prot))
+	__pte(__phys_to_pte_val((phys_addr_t)(pfn) << KERNEL_PAGE_SHIFT) | pgprot_val(prot))
 
 #define pte_none(pte)		(!pte_val(pte))
 #define pte_page(pte)		(pfn_to_page(pte_pfn(pte)))
@@ -635,8 +635,8 @@ static inline pmd_t pmd_mkspecial(pmd_t pmd)
 
 #define __pmd_to_phys(pmd)	__pte_to_phys(pmd_pte(pmd))
 #define __phys_to_pmd_val(phys)	__phys_to_pte_val(phys)
-#define pmd_pfn(pmd)		((__pmd_to_phys(pmd) & PMD_MASK) >> PAGE_SHIFT)
-#define pfn_pmd(pfn,prot)	__pmd(__phys_to_pmd_val((phys_addr_t)(pfn) << PAGE_SHIFT) | pgprot_val(prot))
+#define pmd_pfn(pmd)		((__pmd_to_phys(pmd) & PMD_MASK) >> KERNEL_PAGE_SHIFT)
+#define pfn_pmd(pfn,prot)	__pmd(__phys_to_pmd_val((phys_addr_t)(pfn) << KERNEL_PAGE_SHIFT) | pgprot_val(prot))
 
 #define pud_young(pud)		pte_young(pud_pte(pud))
 #define pud_mkyoung(pud)	pte_pud(pte_mkyoung(pud_pte(pud)))
@@ -659,8 +659,8 @@ static inline pud_t pud_mkhuge(pud_t pud)
 
 #define __pud_to_phys(pud)	__pte_to_phys(pud_pte(pud))
 #define __phys_to_pud_val(phys)	__phys_to_pte_val(phys)
-#define pud_pfn(pud)		((__pud_to_phys(pud) & PUD_MASK) >> PAGE_SHIFT)
-#define pfn_pud(pfn,prot)	__pud(__phys_to_pud_val((phys_addr_t)(pfn) << PAGE_SHIFT) | pgprot_val(prot))
+#define pud_pfn(pud)		((__pud_to_phys(pud) & PUD_MASK) >> KERNEL_PAGE_SHIFT)
+#define pfn_pud(pfn,prot)	__pud(__phys_to_pud_val((phys_addr_t)(pfn) << KERNEL_PAGE_SHIFT) | pgprot_val(prot))
 
 #define pmd_pgprot pmd_pgprot
 static inline pgprot_t pmd_pgprot(pmd_t pmd)
