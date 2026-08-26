@@ -1932,7 +1932,7 @@ retry:
 
 	flush_tlb_batched_pending(mm);
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, nr, PAGE_SIZE) {
+	do {
 		bool any_skipped = false;
 
 		if (need_resched()) {
@@ -1949,7 +1949,7 @@ retry:
 			direct_reclaim = false;
 			break;
 		}
-	}
+	} while (pte += nr, addr += PAGE_SIZE * nr, addr != end);
 
 	/*
 	 * Fast path: try to hold the pmd lock and unmap the PTE page.
@@ -2928,21 +2928,20 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	pte_t *pte, *mapped_pte;
 	spinlock_t *ptl;
 	int err = 0;
-	int step;
 
 	mapped_pte = pte = pte_alloc_map_lock(mm, pmd, addr, &ptl);
 	if (!pte)
 		return -ENOMEM;
 	lazy_mmu_mode_enable();
-	for_each_pte_range(pte, addr, end, step, PAGE_SIZE) {
+	do {
 		BUG_ON(!pte_none(ptep_get(pte)));
 		if (!pfn_modify_allowed(pfn, prot)) {
 			err = -EACCES;
 			break;
 		}
 		set_pte_at(mm, addr, pte, pte_mkspecial(pfn_pte(pfn, prot)));
-		pfn += step;
-	}
+		pfn++;
+	} while (pte++, addr += PAGE_SIZE, addr != end);
 	lazy_mmu_mode_disable();
 	pte_unmap_unlock(mapped_pte, ptl);
 	return err;
@@ -3330,7 +3329,6 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	pte_t *pte, *mapped_pte;
 	int err = 0;
 	spinlock_t *ptl;
-	int step;
 
 	if (create) {
 		mapped_pte = pte = (mm == &init_mm) ?
@@ -3349,13 +3347,13 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	lazy_mmu_mode_enable();
 
 	if (fn) {
-		for_each_pte_range(pte, addr, end, step, PAGE_SIZE) {
+		do {
 			if (create || !pte_none(ptep_get(pte))) {
 				err = fn(pte, addr, data);
 				if (err)
 					break;
 			}
-		}
+		} while (pte++, addr += PAGE_SIZE, addr != end);
 	}
 	*mask |= PGTBL_PTE_MODIFIED;
 
