@@ -1457,7 +1457,7 @@ retry:
 			goto out;
 		}
 next_page:
-		page_increm = 1 + (~(start >> PAGE_SHIFT) & page_mask);
+		page_increm = 1 + (~(start >> mm_pte_shift(mm)) & page_mask);
 		if (page_increm > nr_pages)
 			page_increm = nr_pages;
 
@@ -2899,7 +2899,7 @@ static int gup_fast_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
 		folio_set_referenced(folio);
 		pages[*nr] = page;
 		(*nr)++;
-	} while (ptep++, addr += PAGE_SIZE, addr != end);
+	} while (ptep++, addr += mm_pte_size(current_pgtable_mm()), addr != end);
 
 	ret = 1;
 
