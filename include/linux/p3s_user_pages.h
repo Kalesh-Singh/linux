@@ -17,8 +17,8 @@
 #undef PFN_PHYS
 #undef PHYS_PFN
 
-#define PFN_PHYS(x)	((phys_addr_t)(x) << CONFIG_PAGE_SHIFT)
-#define PHYS_PFN(x)	((unsigned long)((x) >> CONFIG_PAGE_SHIFT))
+#define PFN_PHYS(x)	((phys_addr_t)(x) << KERNEL_PAGE_SHIFT)
+#define PHYS_PFN(x)	((unsigned long)((x) >> KERNEL_PAGE_SHIFT))
 
 #endif /* CONFIG_ARM64_PER_PROCESS_PAGE_SIZE */
 

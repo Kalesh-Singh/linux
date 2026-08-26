@@ -25,11 +25,11 @@
 #if VA_BITS == VA_BITS_MIN
 #define VMALLOC_END		(VMEMMAP_START - SZ_8M)
 #else
-#define VMEMMAP_UNUSED_NPAGES	((_PAGE_OFFSET(vabits_actual) - PAGE_OFFSET) >> CONFIG_PAGE_SHIFT)
+#define VMEMMAP_UNUSED_NPAGES	((_PAGE_OFFSET(vabits_actual) - PAGE_OFFSET) >> KERNEL_PAGE_SHIFT)
 #define VMALLOC_END		(VMEMMAP_START + VMEMMAP_UNUSED_NPAGES * sizeof(struct page) - SZ_8M)
 #endif
 
-#define vmemmap			((struct page *)VMEMMAP_START - (memstart_addr >> CONFIG_PAGE_SHIFT))
+#define vmemmap			((struct page *)VMEMMAP_START - (memstart_addr >> KERNEL_PAGE_SHIFT))
 
 #ifndef __ASSEMBLER__
 

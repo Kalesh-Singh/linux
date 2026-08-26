@@ -31,7 +31,7 @@
  * of the VMEMMAP where 52-bit support is not available in hardware.
  */
 #define VMEMMAP_RANGE	(_PAGE_END(VA_BITS_MIN) - PAGE_OFFSET)
-#define VMEMMAP_SIZE	((VMEMMAP_RANGE >> PAGE_SHIFT) * sizeof(struct page))
+#define VMEMMAP_SIZE	((VMEMMAP_RANGE >> KERNEL_PAGE_SHIFT) * sizeof(struct page))
 
 /*
  * PAGE_OFFSET - the virtual address of the start of the linear map, at the
