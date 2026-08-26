@@ -27,6 +27,7 @@
 
 #include "internal.h"
 #include "swap.h"
+#include <linux/p3s_user_pages.h>
 
 static inline void sanity_check_pinned_pages(struct page **pages,
 					     unsigned long npages)
@@ -1356,6 +1357,7 @@ static long __get_user_pages(struct mm_struct *mm,
 		unsigned int gup_flags, struct page **pages,
 		int *locked)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	long ret = 0, i = 0;
 	struct vm_area_struct *vma = NULL;
 	unsigned long page_mask = 0;
@@ -1653,6 +1655,7 @@ static __always_inline long __get_user_pages_locked(struct mm_struct *mm,
 						int *locked,
 						unsigned int flags)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	long ret, pages_done;
 	bool must_unlock = false;
 
@@ -1814,6 +1817,7 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 		unsigned long start, unsigned long end, int *locked)
 {
 	struct mm_struct *mm = vma->vm_mm;
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned long nr_pages = (end - start) / PAGE_SIZE;
 	int local_locked = 1;
 	int gup_flags;
@@ -1887,6 +1891,7 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 long faultin_page_range(struct mm_struct *mm, unsigned long start,
 			unsigned long end, bool write, int *locked)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned long nr_pages = (end - start) / PAGE_SIZE;
 	int gup_flags;
 	long ret;
@@ -1925,6 +1930,7 @@ long faultin_page_range(struct mm_struct *mm, unsigned long start,
 int __mm_populate(unsigned long start, unsigned long len, int ignore_errors)
 {
 	struct mm_struct *mm = current->mm;
+	P3S_CONTEXT_REMOTE_MM(mm);
 	unsigned long end, nstart, nend;
 	struct vm_area_struct *vma = NULL;
 	int locked = 0;
@@ -2605,6 +2611,7 @@ long get_user_pages_remote(struct mm_struct *mm,
 		unsigned int gup_flags, struct page **pages,
 		int *locked)
 {
+	P3S_CONTEXT_REMOTE_MM(mm);
 	int local_locked = 1;
 
 	if (!is_valid_gup_args(pages, locked, &gup_flags,
