@@ -17,7 +17,6 @@
 #include <linux/shm.h>
 #include <linux/mman.h>
 #include <linux/pagemap.h>
-#include <linux/p3s.h>
 #include <linux/swap.h>
 #include <linux/syscalls.h>
 #include <linux/capability.h>
@@ -152,8 +151,8 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 			      mm->end_data, mm->start_data))
 		goto out;
 
-	newbrk = mm_pte_align(mm, brk);
-	oldbrk = mm_pte_align(mm, mm->brk);
+	newbrk = PAGE_ALIGN(brk);
+	oldbrk = PAGE_ALIGN(mm->brk);
 	if (oldbrk == newbrk) {
 		mm->brk = brk;
 		goto success;
@@ -187,8 +186,8 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	 * expansion area
 	 */
 	vma_iter_init(&vmi, mm, oldbrk);
-	next = vma_find(&vmi, newbrk + mm_pte_size(mm) + stack_guard_gap);
-	if (next && newbrk + mm_pte_size(mm) > vm_start_gap(next))
+	next = vma_find(&vmi, newbrk + PAGE_SIZE + stack_guard_gap);
+	if (next && newbrk + PAGE_SIZE > vm_start_gap(next))
 		goto out;
 
 	brkvma = vma_prev_limit(&vmi, mm->start_brk);
@@ -221,10 +220,10 @@ out:
  */
 static inline unsigned long round_hint_to_min(unsigned long hint)
 {
-	hint = mm_pte_align_down(current->mm, hint);
+	hint &= PAGE_MASK;
 	if (((void *)hint != NULL) &&
 	    (hint < mmap_min_addr))
-		return mm_pte_align(current->mm, mmap_min_addr);
+		return PAGE_ALIGN(mmap_min_addr);
 	return hint;
 }
 
@@ -236,11 +235,11 @@ bool mlock_future_ok(const struct mm_struct *mm, bool is_vma_locked,
 	if (!is_vma_locked || capable(CAP_IPC_LOCK))
 		return true;
 
-	locked_pages = bytes >> mm_pte_shift(mm);
+	locked_pages = bytes >> PAGE_SHIFT;
 	locked_pages += mm->locked_vm;
 
 	limit_pages = rlimit(RLIMIT_MEMLOCK);
-	limit_pages >>= mm_pte_shift(mm);
+	limit_pages >>= PAGE_SHIFT;
 
 	return locked_pages <= limit_pages;
 }
@@ -272,7 +271,7 @@ static inline bool file_mmap_ok(struct file *file, struct inode *inode,
 	if (maxsize && len > maxsize)
 		return false;
 	maxsize -= len;
-	if (pgoff > maxsize >> mm_pte_shift(current_pgtable_mm()))
+	if (pgoff > maxsize >> PAGE_SHIFT)
 		return false;
 	return true;
 }
@@ -368,12 +367,12 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		addr = round_hint_to_min(addr);
 
 	/* Careful about overflows.. */
-	len = mm_pte_align(mm, len);
+	len = PAGE_ALIGN(len);
 	if (!len)
 		return -ENOMEM;
 
 	/* offset overflow? */
-	if ((pgoff + (len >> mm_pte_shift(mm))) < pgoff)
+	if ((pgoff + (len >> PAGE_SHIFT)) < pgoff)
 		return -EOVERFLOW;
 
 	/* Too many mappings? */
@@ -537,7 +536,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			/*
 			 * Set pgoff according to addr for anon_vma.
 			 */
-			pgoff = addr >> mm_pte_shift(mm);
+			pgoff = addr >> PAGE_SHIFT;
 			break;
 		default:
 			return -EINVAL;
@@ -579,10 +578,6 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 		if (!file)
 			return -EBADF;
 		if (is_file_hugepages(file)) {
-			if (mm_is_4kb(current->mm)) {
-				retval = -EINVAL;
-				goto out_fput;
-			}
 			len = ALIGN(len, huge_page_size(hstate_file(file)));
 		} else if (unlikely(flags & MAP_HUGETLB)) {
 			retval = -EINVAL;
@@ -590,9 +585,6 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 		}
 	} else if (flags & MAP_HUGETLB) {
 		struct hstate *hs;
-
-		if (mm_is_4kb(current->mm))
-			return -EINVAL;
 
 		hs = hstate_sizelog((flags >> MAP_HUGE_SHIFT) & MAP_HUGE_MASK);
 		if (!hs)
@@ -725,8 +717,6 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 	info.start_gap = stack_guard_placement(vm_flags);
 	if (filp && is_file_hugepages(filp))
 		info.align_mask = huge_page_mask_align(filp);
-	else
-		info.align_mask = mm_is_4kb(mm) ? (PAGE_SIZE - 1) : 0;
 	return vm_unmapped_area(&info);
 }
 
@@ -764,7 +754,7 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 
 	/* requesting a specific address */
 	if (addr) {
-		addr = mm_pte_align(mm, addr);
+		addr = PAGE_ALIGN(addr);
 		vma = find_vma_prev(mm, addr, &prev);
 		if (mmap_end - len >= addr && addr >= mmap_min_addr &&
 				(!vma || addr + len <= vm_start_gap(vma)) &&
@@ -774,13 +764,11 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 
 	info.flags = VM_UNMAPPED_AREA_TOPDOWN;
 	info.length = len;
-	info.low_limit = mm_pte_size(mm);
+	info.low_limit = PAGE_SIZE;
 	info.high_limit = arch_get_mmap_base(addr, mm->mmap_base);
 	info.start_gap = stack_guard_placement(vm_flags);
 	if (filp && is_file_hugepages(filp))
 		info.align_mask = huge_page_mask_align(filp);
-	else
-		info.align_mask = mm_is_4kb(mm) ? (PAGE_SIZE - 1) : 0;
 	addr = vm_unmapped_area(&info);
 
 	/*
@@ -789,7 +777,7 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	 * can happen with large stack limits and large mmap()
 	 * allocations.
 	 */
-	if (!mm_pte_aligned(mm, addr)) {
+	if (offset_in_page(addr)) {
 		VM_BUG_ON(addr != -ENOMEM);
 		info.flags = 0;
 		info.low_limit = TASK_UNMAPPED_BASE;
@@ -869,7 +857,7 @@ __get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 
 	if (addr > TASK_SIZE - len)
 		return -ENOMEM;
-	if (!mm_pte_aligned(current->mm, addr))
+	if (offset_in_page(addr))
 		return -EINVAL;
 
 	error = security_mmap_addr(addr);
@@ -1111,14 +1099,14 @@ SYSCALL_DEFINE5(remap_file_pages, unsigned long, start, unsigned long, size,
 
 	if (prot)
 		return ret;
-	start = mm_pte_align_down(mm, start);
-	size = mm_pte_align_down(mm, size);
+	start = start & PAGE_MASK;
+	size = size & PAGE_MASK;
 
 	if (start + size <= start)
 		return ret;
 
 	/* Does pgoff wrap? */
-	if (pgoff + (size >> mm_pte_shift(mm)) < pgoff)
+	if (pgoff + (size >> PAGE_SHIFT) < pgoff)
 		return ret;
 
 	if (mmap_read_lock_killable(mm))
@@ -1290,7 +1278,6 @@ void exit_mmap(struct mm_struct *mm)
 	VMA_ITERATOR(vmi, mm, 0);
 	struct unmap_desc unmap;
 
-	mm_set_pgtable_mm(mm);
 	/* mm's last user has gone, and its about to be pulled down */
 	mmu_notifier_release(mm);
 
@@ -1337,7 +1324,6 @@ destroy:
 	trace_exit_mmap(mm);
 	mmap_write_unlock(mm);
 	vm_unacct_memory(nr_accounted);
-	mm_clear_pgtable_mm();
 }
 
 /*
@@ -1347,21 +1333,19 @@ destroy:
 bool may_expand_vm(struct mm_struct *mm, const vma_flags_t *vma_flags,
 		   unsigned long npages)
 {
-	unsigned long page_shift = mm_pte_shift(mm);
-
-	if (mm->total_vm + npages > rlimit(RLIMIT_AS) >> page_shift)
+	if (mm->total_vm + npages > rlimit(RLIMIT_AS) >> PAGE_SHIFT)
 		return false;
 
 	if (is_data_mapping_vma_flags(vma_flags) &&
-	    mm->data_vm + npages > rlimit(RLIMIT_DATA) >> page_shift) {
+	    mm->data_vm + npages > rlimit(RLIMIT_DATA) >> PAGE_SHIFT) {
 		/* Workaround for Valgrind */
 		if (rlimit(RLIMIT_DATA) == 0 &&
-		    mm->data_vm + npages <= rlimit_max(RLIMIT_DATA) >> page_shift)
+		    mm->data_vm + npages <= rlimit_max(RLIMIT_DATA) >> PAGE_SHIFT)
 			return true;
 
 		pr_warn_once("%s (%d): VmData %lu exceed data ulimit %lu. Update limits%s.\n",
 			     current->comm, current->pid,
-			     (mm->data_vm + npages) << page_shift,
+			     (mm->data_vm + npages) << PAGE_SHIFT,
 			     rlimit(RLIMIT_DATA),
 			     ignore_rlimit_data ? "" : " or use boot option ignore_rlimit_data");
 
@@ -1490,7 +1474,7 @@ static struct vm_area_struct *__install_special_mapping(
 	if (ret)
 		goto out;
 
-	vm_stat_account(mm, vma->vm_flags, len >> mm_pte_shift(mm));
+	vm_stat_account(mm, vma->vm_flags, len >> PAGE_SHIFT);
 
 	perf_event_mmap(vma);
 
