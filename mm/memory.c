@@ -4360,6 +4360,7 @@ static inline void unmap_mapping_range_tree(struct rb_root_cached *root,
 	struct mmu_gather tlb;
 
 	vma_interval_tree_foreach(vma, root, first_index, last_index) {
+		P3S_CONTEXT_REMOTE_MM(vma->vm_mm);
 		const pgoff_t start_idx = max(first_index, vma->vm_pgoff);
 		const pgoff_t end_idx = min(last_index, vma_last_pgoff(vma)) + 1;
 		unsigned long start, end;
@@ -6328,6 +6329,7 @@ split:
 static void fix_spurious_fault(struct vm_fault *vmf,
 			       enum pgtable_level ptlevel)
 {
+	P3S_CONTEXT_REMOTE_MM(vmf->vma->vm_mm);
 	/* Skip spurious TLB flush for retried page fault */
 	if (vmf->flags & FAULT_FLAG_TRIED)
 		return;
@@ -7111,7 +7113,7 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 			if (bytes > pg_size - page_offset)
 				bytes = pg_size - page_offset;
 
-			maddr = kmap_local_folio(folio, folio_page_idx(folio, page) * PAGE_SIZE);
+			maddr = kmap_local_folio(folio, folio_page_idx(folio, page) * (1UL << KERNEL_PAGE_SHIFT));
 			if (write) {
 				copy_to_user_page(vma, page, addr,
 						  maddr + offset, buf, bytes);
