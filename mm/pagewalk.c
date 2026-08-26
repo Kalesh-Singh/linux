@@ -9,6 +9,7 @@
 #include <asm/tlbflush.h>
 
 #include "internal.h"
+#include <linux/p3s_user_pages.h>
 
 /*
  * We want to know the real level where a entry is located ignoring any
@@ -30,9 +31,12 @@ static int walk_pte_range_inner(pte_t *pte, unsigned long addr,
 				unsigned long end, struct mm_walk *walk)
 {
 	const struct mm_walk_ops *ops = walk->ops;
+	P3S_CONTEXT_REMOTE_MM(walk->mm);
 	int err = 0;
 
 	for (;;) {
+		walk->step = 1;
+
 		if (ops->install_pte && pte_none(ptep_get(pte))) {
 			pte_t new_pte;
 
@@ -50,10 +54,10 @@ static int walk_pte_range_inner(pte_t *pte, unsigned long addr,
 			if (err)
 				break;
 		}
-		if (addr >= end - PAGE_SIZE)
+		if (addr >= end - walk->step * PAGE_SIZE)
 			break;
-		addr += PAGE_SIZE;
-		pte++;
+		addr += walk->step * PAGE_SIZE;
+		pte += walk->step;
 	}
 	return err;
 }
